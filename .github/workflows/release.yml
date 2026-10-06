@@ -1,0 +1,142 @@
+name: Release
+
+# Packs the Digger.Debugger .NET tool and, for a v* tag, publishes it to nuget.org:
+#   Digger.Debugger.<rid>   NativeAOT build, each packed on a runner of that OS and architecture
+#   Digger.Debugger.any     framework-dependent fallback for every other platform
+#   Digger.Debugger         the pointer package `dotnet tool install` resolves, pushed last
+# Run it by hand (Actions → Release → Run workflow) to build and test without publishing.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: version
+        name: Version from the tag (v1.2.3 → 1.2.3), else Directory.Build.props + -ci.N
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(sed -n 's|.*<Version>\(.*\)</Version>.*|\1|p' Directory.Build.props)-ci.$GITHUB_RUN_NUMBER"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  portable:
+    needs: version
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build Digger.slnx
+      - run: dotnet test --solution Digger.slnx
+      - name: End-to-end smoke test
+        run: python3 tools/dap_smoke.py
+      - name: Pack the pointer and framework-dependent packages
+        run: |
+          dotnet pack src/Digger -c Release -p:Version="$VERSION"
+          dotnet pack src/Digger -c Release -p:Version="$VERSION" -r any -p:PublishAot=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-portable
+          path: artifacts/package/release/*.nupkg
+          if-no-files-found: error
+
+  native:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Older Ubuntu = older glibc, so the binary runs on more distributions.
+          - { rid: linux-x64, os: ubuntu-22.04 }
+          - { rid: linux-arm64, os: ubuntu-22.04-arm }
+          - { rid: osx-x64, os: macos-15-intel }
+          - { rid: osx-arm64, os: macos-15 }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      RID: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: NativeAOT prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Pack NativeAOT
+        run: dotnet pack src/Digger -c Release -p:Version="$VERSION" -r "$RID"
+      - name: End-to-end smoke test of the packed binary
+        # macOS isn't a tested platform yet: report, don't block the release.
+        continue-on-error: ${{ runner.os == 'macOS' }}
+        run: |
+          dotnet build samples/HelloDebug
+          unzip -q "artifacts/package/release/Digger.Debugger.$RID.$VERSION.nupkg" -d "$RUNNER_TEMP/package"
+          chmod +x "$RUNNER_TEMP/package/tools/any/$RID/digger"
+          python3 tools/dap_smoke.py "$RUNNER_TEMP/package/tools/any/$RID/digger"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.rid }}
+          path: artifacts/package/release/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [version, portable, native]
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      contents: write # GitHub release
+      id-token: write # NuGet trusted publishing
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          path: packages
+          merge-multiple: true
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: NuGet login (OIDC → short-lived API key)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Push the RID packages, then the pointer package
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          push() { dotnet nuget push "$1" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate; }
+          pointer="packages/Digger.Debugger.$VERSION.nupkg"
+          test -f "$pointer"
+          for package in packages/*.nupkg; do
+            [[ "$package" == "$pointer" ]] || push "$package"
+          done
+          push "$pointer"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" packages/*.nupkg
+          --repo "$GITHUB_REPOSITORY" --title "Digger $VERSION" --generate-notes
+          $([[ "$VERSION" == *-* ]] && echo --prerelease)

@@ -34,7 +34,7 @@ Digger installs as a .NET tool (package `Digger.Debugger`, command `digger`).
 Requirements: the .NET 10 SDK.
 
 ```sh
-dotnet tool install -g Digger.Debugger  # once published: NativeAOT build for linux/osx x64/arm64,
+dotnet tool install -g Digger.Debugger  # NativeAOT build for linux/osx x64/arm64,
                                         # framework-dependent fallback elsewhere
 scripts/install.sh                      # from this checkout: NativeAOT build (needs clang / Xcode tools)
 scripts/install.sh --jit                # from this checkout: framework-dependent build, no clang needed
@@ -208,6 +208,20 @@ Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before changing the engine: it
 the threading model and the rules ICorDebug imposes (values go stale after a func-eval,
 every callback must be continued exactly once, and so on).
 
+### Releasing
+
+Pushing a `v*` tag (for example `git tag v0.2.0 && git push origin v0.2.0`) runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml): it tests, packs the NativeAOT
+packages on Linux and macOS runners plus the framework-dependent fallback, pushes them to
+nuget.org (RID packages first, the `Digger.Debugger` pointer package last) and creates a
+GitHub release. The tag sets the version; a tag with a suffix (`v0.2.0-preview.1`) makes a
+prerelease. Running the workflow by hand builds and tests everything without publishing.
+
+Publishing uses [NuGet trusted publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing),
+so there is no API key secret. It needs a trusted publishing policy on nuget.org for this
+repository, workflow `release.yml` and environment `nuget`, and a repository variable
+`NUGET_USER` with the nuget.org user name.
+
 ### Layout
 
 ```
@@ -220,7 +234,8 @@ samples/HelloDebug  debuggee used by the tests
 tools/              end-to-end DAP test clients
 editors/zed         Zed extension (Rust → wasm)
 scripts/install.sh  pack + install as a global tool from this checkout
-scripts/pack.sh     build the tool packages for publishing
+scripts/pack.sh     build the tool packages locally (CI publishes them)
+.github/workflows   release.yml: test, pack and publish to nuget.org on a v* tag
 ```
 
 ## Limitations and roadmap
