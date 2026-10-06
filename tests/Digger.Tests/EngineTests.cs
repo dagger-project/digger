@@ -32,15 +32,17 @@ public sealed class EngineTests
         Assert.Equal(expected, CommandLine.Build("prog", arguments));
 
     [Fact]
-    public void EnvironmentBlock_IsDoubleNulTerminatedAndHonorsRemovals()
+    public void EnvironmentBlock_IsUtf8DoubleNulTerminatedAndHonorsRemovals()
     {
-        var block = new string(RuntimeLauncher.BuildEnvironmentBlock(new Dictionary<string, string?>(System.StringComparer.Ordinal)
+        var block = System.Text.Encoding.UTF8.GetString(RuntimeLauncher.BuildEnvironmentBlock(new Dictionary<string, string?>(System.StringComparer.Ordinal)
         {
             ["DIGGER_TEST_ADDED"] = "1",
+            ["DIGGER_TEST_UNICODE"] = "é",
             ["PATH"] = null,
         }));
         Assert.EndsWith("\0\0", block, System.StringComparison.Ordinal);
         Assert.Contains("DIGGER_TEST_ADDED=1\0", block, System.StringComparison.Ordinal);
+        Assert.Contains("DIGGER_TEST_UNICODE=é\0", block, System.StringComparison.Ordinal);
         Assert.DoesNotContain("\0PATH=", "\0" + block, System.StringComparison.Ordinal);
     }
 

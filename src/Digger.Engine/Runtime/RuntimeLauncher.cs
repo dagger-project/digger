@@ -79,7 +79,7 @@ internal sealed unsafe class RuntimeLauncher : IDisposable
 
         fixed (char* command = commandBuffer)
         fixed (char* cwd = workingDirectory)
-        fixed (char* env = environmentBlock)
+        fixed (byte* env = environmentBlock)
         {
             var hr = DbgShim.CreateProcessForLaunch(command, bSuspendProcess: true, env, cwd, out var pid, out _resumeHandle);
             if (hr < 0)
@@ -179,8 +179,12 @@ internal sealed unsafe class RuntimeLauncher : IDisposable
         }
     }
 
-    /// <summary>Builds a Windows-style UTF-16 environment block ("K=V\0K=V\0\0") over the current environment.</summary>
-    internal static char[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> overrides)
+    /// <summary>
+    /// Builds an environment block ("K=V\0K=V\0\0") over the current environment, in UTF-8:
+    /// dbgshim calls CreateProcessW without CREATE_UNICODE_ENVIRONMENT, so its PAL reads the
+    /// block as narrow strings (a UTF-16 block arrives as one-letter variables and nothing else).
+    /// </summary>
+    internal static byte[] BuildEnvironmentBlock(IReadOnlyDictionary<string, string?> overrides)
     {
         var merged = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
@@ -210,7 +214,7 @@ internal sealed unsafe class RuntimeLauncher : IDisposable
         }
 
         _ = builder.Append('\0');
-        return builder.ToString().ToCharArray();
+        return Encoding.UTF8.GetBytes(builder.ToString());
     }
 
     public void Dispose()

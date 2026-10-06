@@ -254,6 +254,7 @@ def main():
     output = "".join(client.output)
     check("HelloDebug starting" in output and "async result = 108" in output, "stdout forwarded as output events")
     check("done (stderr)" in output, "stderr forwarded")
+    check("DIGGER_SMOKE=1 PATH set=True" in output, "launch env added on top of the inherited environment")
     client.request("disconnect", {})
     client.proc.wait(timeout=10)
     check(client.proc.returncode == 0, "adapter exits cleanly")

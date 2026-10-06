@@ -26,7 +26,7 @@ netcoredbg), using source-generated COM bindings, and reads portable PDBs with
 | Editing | set primitives, strings and `null` |
 | Output | debuggee stdout/stderr and `Debugger.Log` forwarded as DAP output, or `"console": "integratedTerminal"` to run in the editor's terminal (stdin works); real exit codes |
 
-Platforms: Linux x64/arm64 (tested on x64), macOS should work (untested). Windows is not supported yet.
+Platforms: Linux and macOS, x64 and arm64 (each release is smoke-tested on all four). Windows is not supported yet.
 
 ## Quick start
 

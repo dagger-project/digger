@@ -21,6 +21,11 @@ public static class Program
     public static async Task<int> Main(string[] args)
     {
         Console.WriteLine("HelloDebug starting");
+        if (Environment.GetEnvironmentVariable("DIGGER_SMOKE") is { } smoke)
+        {
+            // The launch "env" reached the program, on top of the inherited environment.
+            Console.WriteLine($"DIGGER_SMOKE={smoke} PATH set={Environment.GetEnvironmentVariable("PATH") is not null}");
+        }
         switch (args.FirstOrDefault())
         {
             case "spin":                                   // for pause / attach

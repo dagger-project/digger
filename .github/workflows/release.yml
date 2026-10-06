@@ -85,8 +85,6 @@ jobs:
       - name: Pack NativeAOT
         run: dotnet pack src/Digger -c Release -p:Version="$VERSION" -r "$RID"
       - name: End-to-end smoke test of the packed binary
-        # macOS isn't a tested platform yet: report, don't block the release.
-        continue-on-error: ${{ runner.os == 'macOS' }}
         run: |
           dotnet build samples/HelloDebug
           unzip -q "artifacts/package/release/Digger.Debugger.$RID.$VERSION.nupkg" -d "$RUNNER_TEMP/package"
