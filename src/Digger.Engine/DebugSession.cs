@@ -113,6 +113,10 @@ public sealed partial class DebugSession : ICallbackSink, IDisposable
         {
             LaunchInTerminal(terminal, Path.GetFileName(program), workingDirectory, command, launch.Environment);
         }
+        else if (launch.IsolateFromTerminal && !OperatingSystem.IsWindows())
+        {
+            LaunchIsolated(CommandLine.Build(command[0], command[1..]), workingDirectory, launch.Environment);
+        }
         else
         {
             _launcher = RuntimeLauncher.Launch(CommandLine.Build(command[0], command[1..]), workingDirectory, launch.Environment, OnRuntimeStarted);
@@ -126,6 +130,48 @@ public sealed partial class DebugSession : ICallbackSink, IDisposable
         {
             _launcher?.Resume();
         }
+    }
+
+    /// <summary>
+    /// Launches with fd 0 pointing at /dev/null (the child inherits our descriptors at fork)
+    /// and moves the still-suspended child into its own process group, so the terminal's
+    /// Ctrl-C and keystrokes go to digger. The PAL holds a suspended child before exec,
+    /// which is what lets setpgid succeed.
+    /// </summary>
+    private void LaunchIsolated(string commandLine, string workingDirectory, IReadOnlyDictionary<string, string?>? environment)
+    {
+        var savedStdin = Libc.dup(0);
+        var devNull = Libc.open("/dev/null", Libc.O_RDONLY);
+        try
+        {
+            if (savedStdin >= 0 && devNull >= 0)
+            {
+                _ = Libc.dup2(devNull, 0);
+            }
+
+            _launcher = RuntimeLauncher.Launch(commandLine, workingDirectory, environment, OnRuntimeStarted);
+        }
+        finally
+        {
+            if (savedStdin >= 0)
+            {
+                _ = Libc.dup2(savedStdin, 0);
+                _ = Libc.close(savedStdin);
+            }
+
+            if (devNull >= 0)
+            {
+                _ = Libc.close(devNull);
+            }
+        }
+
+        _processId = (int)_launcher.ProcessId;
+        if (Libc.setpgid(_processId, _processId) != 0)
+        {
+            Log.Warn($"setpgid({_processId}) failed (errno {System.Runtime.InteropServices.Marshal.GetLastPInvokeError()}); Ctrl-C will reach the program too");
+        }
+
+        StartExitWatcher(_processId);
     }
 
     /// <summary>

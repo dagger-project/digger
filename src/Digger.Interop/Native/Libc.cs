@@ -40,6 +40,9 @@ public static partial class Libc
     public static partial int kill(int pid, int sig);
 
     [LibraryImport(Library, SetLastError = true)]
+    public static partial int setpgid(int pid, int pgid);
+
+    [LibraryImport(Library, SetLastError = true)]
     private static unsafe partial int waitid(int idtype, int id, byte* infop, int options);
 
     /// <summary>

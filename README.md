@@ -1,8 +1,9 @@
 # Digger
 
-A debugger for .NET (CoreCLR) applications that speaks the
-[Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/), written in C# 14.
-It works in Zed, Neovim (nvim-dap), Helix, Emacs (dape) and any other DAP client.
+A debugger for .NET (CoreCLR) applications, written in C# 14. Use it straight from the
+terminal (`digger debug`, modeled on Go's [Delve](https://github.com/go-delve/delve)) or from
+any editor that speaks the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/):
+Zed, Neovim (nvim-dap), Helix, Emacs (dape) and others.
 
 Digger talks to the runtime through `ICorDebug` (the same API used by Visual Studio and
 netcoredbg), using source-generated COM bindings, and reads portable PDBs with
@@ -45,6 +46,48 @@ Global tools live in `~/.dotnet/tools`; make sure it is on `PATH` (fish:
 
 Editors start the debugger as `digger dap`, which speaks the Debug Adapter Protocol over
 stdin/stdout (like Delve's `dlv dap`).
+
+### Terminal
+
+```console
+$ cd src/MyApp
+$ digger debug                      # dotnet build, then debug (like `dlv debug`)
+Type 'help' for list of commands.
+(digger) break Program.cs:12
+Breakpoint 1 set at MyApp.Program.Main() ./Program.cs:12
+(digger) continue
+> [Breakpoint 1] MyApp.Program.Main() ./Program.cs:12 (hits: 1)
+     7:      ...
+=>● 12:          var total = Sum(items);
+(digger) print items
+(digger) next
+```
+
+| Command | |
+| --- | --- |
+| `digger debug [project] [-- args]` | build the project in the current directory (or the given directory / project file) in Debug and debug it; `--framework`, `--configuration`, `--build-flags="..."`, `--no-build` |
+| `digger exec <program> [-- args]` | debug a built `.dll` or apphost executable |
+| `digger attach <pid>` | attach to a running .NET process (`exit` offers to leave it running) |
+
+All three take `--wd=dir` (working directory, default: the current one) and `--init=file` (debugger
+commands to run at startup). The program shares the terminal for output; its stdin is
+`/dev/null`, so Ctrl-C reaches the debugger and pauses the program.
+
+Commands follow Delve's names and aliases; `help` lists them and `help <command>` explains one.
+An empty line repeats the last `next`/`step`/`continue`/`list`, and Tab completes commands,
+file names and expressions.
+
+| | |
+| --- | --- |
+| Running | `continue` (`c`) [location], `next` (`n`) [count], `step` (`s`), `stepout` (`so`), `restart` (`r`), `rebuild`, `exit` (`q`), Ctrl-C to pause |
+| Breakpoints | `break` (`b`) location [`if` condition], `breakpoints` (`bp`), `clear` id, `clearall`, `condition` (`cond`) id expr / `-hitcount` id op n, `toggle` id |
+| Data | `print` (`p`) [-x] expr, `locals` [-v], `whatis` expr, `set` var = value, `display` -a expr |
+| Threads and stack | `threads`, `thread` (`tr`) id, `stack` (`bt`) [depth] [-full], `frame` n [command], `up`, `down` |
+| Other | `list` (`l`) [location], `sources` [regex], `libraries`, `help` (`h`) |
+
+Locations are `Program.cs:12` (any unique path suffix), `12` (current file), `+3`/`-3`, or a
+method: `Main`, `Program.Main`, `MyApp.Program.Main`. History is kept in
+`~/.config/digger/history`.
 
 Your programs must be built with portable PDBs (the SDK default) and, for the best
 experience, in `Debug` configuration.
@@ -171,9 +214,12 @@ the container's source paths to your checkout.
 
 Exception filters: `all` (thrown) and `unhandled` (on by default).
 
-Command line:
+Command line (see also [Terminal](#terminal)):
 
 ```
+digger debug [project] [-- args]    build and debug in the terminal
+digger exec <program> [-- args]     debug a built program in the terminal
+digger attach <pid>                 attach to a process in the terminal
 digger dap                          DAP over stdin/stdout (what editors use)
 digger dap --server[=4711]          DAP over TCP on 127.0.0.1 (debug the adapter itself)
 digger dap --log=/tmp/digger.log    diagnostic log; add --trace to log every protocol message
@@ -194,6 +240,7 @@ tools/dap_smoke.py                # end-to-end: drives digger over DAP against s
 tools/dap_scenarios.py            # entry, pause, attach/detach, logpoints, async stepping, DebuggerDisplay,
                                   # collections, integratedTerminal, crashes
 tools/dap_smoke.py path/to/digger # same tests against e.g. the NativeAOT build
+tools/cli_smoke.py                # end-to-end: scripts the terminal debugger (digger exec / debug)
 ```
 
 The end-to-end scripts need Python 3 and a built `samples/HelloDebug`
@@ -228,7 +275,8 @@ repository, workflow `release.yml` and environment `nuget`, and a repository var
 src/Digger.Protocol DAP message types, framed JSON transport (System.Text.Json source generation)
 src/Digger.Interop  [GeneratedComInterface] ICorDebug bindings, dbgshim and libc P/Invoke
 src/Digger.Engine   the debugger: session, callbacks, breakpoints, stepping, symbols, inspection, evaluator
-src/Digger          the digger executable and .NET tool package: DAP request handlers, stdio redirection, CLI
+src/Digger          the digger executable and .NET tool package: DAP request handlers, stdio redirection,
+                    terminal debugger (Cli/)
 tests/Digger.Tests  unit tests (xunit v3, Microsoft.Testing.Platform)
 samples/HelloDebug  debuggee used by the tests
 tools/              end-to-end DAP test clients

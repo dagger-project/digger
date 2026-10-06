@@ -100,6 +100,15 @@ public sealed class SymbolReader : IDisposable
 
     public bool ContainsDocument(string path) => !FindDocument(path).IsNil;
 
+    /// <summary>Paths of all source documents, as recorded at build time.</summary>
+    public IEnumerable<string> GetDocumentPaths()
+    {
+        foreach (var handle in _pdb.Documents)
+        {
+            yield return _pdb.GetString(_pdb.GetDocument(handle).Name);
+        }
+    }
+
     // ---- Line -> IL --------------------------------------------------------------------
 
     /// <summary>

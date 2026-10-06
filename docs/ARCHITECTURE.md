@@ -19,7 +19,14 @@
   in IDL order** (see the header of `Interfaces.cs`); unused parameter types become `nint`.
 * **Digger.Engine**: everything else, DAP-agnostic. `DebugSession` is the facade.
 * **Digger** (exe): `DapServer` maps requests to `DebugSession` calls and engine events to
-  DAP events; `StdioRedirector` sets up file descriptors (below).
+  DAP events; `StdioRedirector` sets up file descriptors (below). `Cli/` is the Delve-style
+  terminal debugger (`digger debug|exec|attach`): `Repl` runs commands on the main thread,
+  calls `DebugSession` through `EngineDispatcher.Invoke`, and blocks on a queue that its
+  `IDebuggerEvents` sink fills with stops and exits. It keeps its own breakpoint table (ids
+  stable across restarts) and re-sends a file's breakpoints on every change, as an editor
+  would. The program is launched lazily, at the first `continue`/`next`, with
+  `LaunchOptions.IsolateFromTerminal`: stdin is `/dev/null` and the still-suspended child is
+  moved to its own process group, so Ctrl-C reaches digger (which pauses) and not the program.
 
 ## Threading model
 

@@ -45,6 +45,12 @@ public sealed record LaunchOptions(string Program)
 
     /// <summary>When set, the program runs in the editor's terminal instead of under digger's stdio.</summary>
     public ITerminalHost? Terminal { get; init; }
+
+    /// <summary>
+    /// Shares digger's terminal for output only: the program gets its own process group (so
+    /// Ctrl-C reaches digger, not the program) and reads stdin from /dev/null (Unix).
+    /// </summary>
+    public bool IsolateFromTerminal { get; init; }
 }
 
 /// <summary>The editor's ability to run a command in a terminal (DAP <c>runInTerminal</c>).</summary>
