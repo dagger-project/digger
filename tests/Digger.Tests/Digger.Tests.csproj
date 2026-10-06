@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Digger.Protocol\Digger.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\Digger.Engine\Digger.Engine.csproj" />
+    <!-- The sample's dll + pdb are copied next to the tests for symbol-reading tests. -->
+    <ProjectReference Include="..\..\samples\HelloDebug\HelloDebug.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,10 @@
+bin/
+obj/
+artifacts/
+*.user
+.vs/
+.idea/
+*.log
+editors/zed/target/
+editors/zed/extension.wasm
+__pycache__/

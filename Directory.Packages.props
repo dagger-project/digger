@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Meziantou.Analyzer" Version="3.0.291" />
+    <PackageVersion Include="Microsoft.Diagnostics.DbgShim" Version="10.0.745401" />
+    <PackageVersion Include="xunit.v3" Version="4.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Primitives" Version="10.0.12" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <Description>Debug Adapter Protocol server for .NET (CoreCLR) applications.</Description>
+    <AssemblyName>digger</AssemblyName>
+    <RootNamespace>Digger</RootNamespace>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <!-- `dotnet publish -r linux-x64` produces a single native binary. -->
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <!-- Keeps digger.dbg and the pdbs out of published output and tool packages. -->
+    <CopyOutputSymbolsToPublishDirectory>false</CopyOutputSymbolsToPublishDirectory>
+    <PublishDocumentationFile>false</PublishDocumentationFile>
+    <PublishReferencesDocumentationFiles>false</PublishReferencesDocumentationFiles>
+
+    <!--
+      Packed as a .NET tool: `dotnet tool install -g Digger.Debugger` installs the `digger`
+      command (the `digger` package id belongs to an unrelated tool). With PublishAot,
+      `dotnet pack` makes the pointer package; `dotnet pack -r <rid>` makes each NativeAOT
+      package, and `dotnet pack -r any -p:PublishAot=false` the framework-dependent fallback
+      (scripts/pack.sh).
+    -->
+    <IsPackable>true</IsPackable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>digger</ToolCommandName>
+    <PackageId>Digger.Debugger</PackageId>
+    <ToolPackageRuntimeIdentifiers>linux-x64;linux-arm64;osx-x64;osx-arm64;any</ToolPackageRuntimeIdentifiers>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>debugger;dap;debug-adapter-protocol;coreclr;icordebug</PackageTags>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+  <!-- The referenced projects' pdbs ride along as reference-related files; drop them too. -->
+  <Target Name="RemovePdbsFromPublish" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="'%(Extension)' == '.pdb'" />
+    </ItemGroup>
+  </Target>
+  <ItemGroup>
+    <ProjectReference Include="..\Digger.Protocol\Digger.Protocol.csproj" />
+    <ProjectReference Include="..\Digger.Engine\Digger.Engine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Ships libdbgshim for every supported RID under runtimes/<rid>/native. -->
+    <PackageReference Include="Microsoft.Diagnostics.DbgShim" />
+  </ItemGroup>
+</Project>

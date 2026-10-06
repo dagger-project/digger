@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Digger.Protocol/Digger.Protocol.csproj" />
+    <Project Path="src/Digger.Interop/Digger.Interop.csproj" />
+    <Project Path="src/Digger.Engine/Digger.Engine.csproj" />
+    <Project Path="src/Digger/Digger.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Digger.Tests/Digger.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/HelloDebug/HelloDebug.csproj" />
+  </Folder>
+</Solution>

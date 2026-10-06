@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Digger",
+  "description": "Configuration for the Digger .NET debug adapter.",
+  "type": "object",
+  "oneOf": [
+    {
+      "title": "Launch",
+      "properties": {
+        "request": { "const": "launch" },
+        "program": {
+          "type": "string",
+          "description": "Path to the program to debug: the built .dll (run with `dotnet`) or the apphost executable."
+        },
+        "args": { "type": "array", "items": { "type": "string" }, "description": "Command line arguments." },
+        "cwd": { "type": "string", "description": "Working directory. Defaults to the program's directory." },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "null"] },
+          "description": "Environment variables to add (null removes a variable)."
+        },
+        "stopAtEntry": { "type": "boolean", "default": false, "description": "Stop at the first line of Main." },
+        "console": {
+          "type": "string",
+          "enum": ["internalConsole", "integratedTerminal", "externalTerminal"],
+          "default": "internalConsole",
+          "description": "Where the program runs: the debug console (no stdin), or a terminal (stdin works)."
+        },
+        "justMyCode": { "type": "boolean", "default": true, "description": "Only stop and step in code that has symbols and is not optimized." },
+        "enableStepFiltering": { "type": "boolean", "default": true, "description": "Step over compiler-generated (hidden) code." },
+        "evaluateProperties": { "type": "boolean", "default": true, "description": "Run property getters when expanding objects." },
+        "lazyProperties": { "type": "boolean", "default": false, "description": "Show properties as click-to-evaluate instead of running every getter on expand." },
+        "symbolServer": { "type": "boolean", "default": false, "description": "Download missing PDBs from the Microsoft and NuGet symbol servers (cached in ~/.cache/digger)." },
+        "sourceLink": { "type": "boolean", "default": true, "description": "Download sources through Source Link when they are not available locally." },
+        "sourceFileMap": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Maps build-time source path prefixes to local ones, e.g. { \"/src\": \"/home/me/project\" }."
+        },
+        "dotnetPath": { "type": "string", "description": "The `dotnet` host to run .dll programs with." },
+        "noDebug": { "type": "boolean", "default": false, "description": "Run without debugging." },
+        "logFile": { "type": "string", "description": "Write a Digger diagnostic log to this file." }
+      },
+      "required": ["request", "program"]
+    },
+    {
+      "title": "Attach",
+      "properties": {
+        "request": { "const": "attach" },
+        "processId": { "type": ["integer", "string"], "description": "Process id of a running .NET process." },
+        "justMyCode": { "type": "boolean", "default": true },
+        "evaluateProperties": { "type": "boolean", "default": true },
+        "lazyProperties": { "type": "boolean", "default": false, "description": "Show properties as click-to-evaluate instead of running every getter on expand." },
+        "symbolServer": { "type": "boolean", "default": false, "description": "Download missing PDBs from the Microsoft and NuGet symbol servers (cached in ~/.cache/digger)." },
+        "sourceLink": { "type": "boolean", "default": true, "description": "Download sources through Source Link when they are not available locally." },
+        "sourceFileMap": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Maps build-time source path prefixes to local ones, e.g. { \"/src\": \"/home/me/project\" }."
+        },
+        "logFile": { "type": "string" }
+      },
+      "required": ["request", "processId"]
+    }
+  ]
+}

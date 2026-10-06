@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Debug Adapter Protocol wire types and a framed JSON transport.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Digger.Tests" />
+  </ItemGroup>
+</Project>

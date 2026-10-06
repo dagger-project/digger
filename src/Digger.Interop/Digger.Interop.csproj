@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Source-generated COM bindings for ICorDebug and P/Invoke bindings for dbgshim and libc.</Description>
+  </PropertyGroup>
+</Project>

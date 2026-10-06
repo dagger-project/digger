@@ -1,0 +1,44 @@
+// Zed debug scenarios for this repository. Needs the Digger Zed extension
+// (editors/zed) and `digger` on PATH (scripts/install.sh).
+[
+  {
+    "label": "HelloDebug (Digger)",
+    "adapter": "Digger",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/artifacts/bin/HelloDebug/debug/HelloDebug.dll",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "stopAtEntry": false,
+    "justMyCode": true,
+    "build": {
+      "command": "dotnet",
+      "args": ["build", "samples/HelloDebug"],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    }
+  },
+  {
+    "label": "HelloDebug in terminal, reads stdin (Digger)",
+    "adapter": "Digger",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/artifacts/bin/HelloDebug/debug/HelloDebug.dll",
+    "args": ["read"],
+    "console": "integratedTerminal",
+    "build": {
+      "command": "dotnet",
+      "args": ["build", "samples/HelloDebug"],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    }
+  },
+  {
+    "label": "HelloDebug extras: DebuggerDisplay, collections (Digger)",
+    "adapter": "Digger",
+    "request": "launch",
+    "program": "$ZED_WORKTREE_ROOT/artifacts/bin/HelloDebug/debug/HelloDebug.dll",
+    "args": ["extras"],
+    "build": {
+      "command": "dotnet",
+      "args": ["build", "samples/HelloDebug"],
+      "cwd": "$ZED_WORKTREE_ROOT"
+    }
+  }
+]

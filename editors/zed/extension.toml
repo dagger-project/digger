@@ -1,0 +1,10 @@
+id = "digger"
+name = "Digger (.NET Debugger)"
+description = "Debug .NET (CoreCLR) applications with the Digger debug adapter."
+version = "0.1.0"
+schema_version = 1
+authors = ["Digger contributors"]
+repository = "https://github.com/digger-project/digger"
+
+[debug_adapters.Digger]
+schema_path = "debug_adapter_schemas/Digger.json"
