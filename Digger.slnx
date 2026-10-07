@@ -10,5 +10,6 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/HelloDebug/HelloDebug.csproj" />
+    <Project Path="samples/HelloTests/HelloTests.csproj" />
   </Folder>
 </Solution>

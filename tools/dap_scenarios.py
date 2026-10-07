@@ -19,7 +19,8 @@ check = smoke.check
 line_of = smoke.line_of
 
 
-def start(launch_args, breakpoints=None, function_breakpoints=None, exceptions=None, request="launch", source=None, reverse_handler=None):
+def start(launch_args, breakpoints=None, function_breakpoints=None, exceptions=None, request="launch", source=None, reverse_handler=None,
+          exception_options=None):
     client = smoke.Client()
     client.reverse_handler = reverse_handler
     client.request("initialize", {"adapterID": "digger", "supportsRunInTerminalRequest": reverse_handler is not None})
@@ -30,7 +31,10 @@ def start(launch_args, breakpoints=None, function_breakpoints=None, exceptions=N
         client.request("setBreakpoints", {"source": {"path": source or SOURCE}, "breakpoints": breakpoints})
     if function_breakpoints is not None:
         client.request("setFunctionBreakpoints", {"breakpoints": function_breakpoints})
-    client.request("setExceptionBreakpoints", {"filters": exceptions if exceptions is not None else ["unhandled"]})
+    arguments = {"filters": exceptions if exceptions is not None else ["unhandled"]}
+    if exception_options is not None:
+        arguments["filterOptions"] = exception_options
+    client.request("setExceptionBreakpoints", arguments)
     client.request("configurationDone")
     return client
 
@@ -286,6 +290,27 @@ def unhandled_exception():
     finish(client)
 
 
+def exception_filter_condition():
+    print("exception filter condition")
+    probe = smoke.Client()
+    capabilities = probe.request("initialize", {"adapterID": "digger"})["body"]
+    probe.proc.kill()
+    check(capabilities.get("supportsExceptionFilterOptions"), "supportsExceptionFilterOptions")
+
+    # Excluded type: the program catches its exception and runs to the end.
+    client = start({"program": PROGRAM}, exception_options=[{"filterId": "all", "condition": "!InvalidOperationException"}])
+    client.wait_event("terminated")
+    check("caught: Something went wrong" in "".join(client.output), "excluded exception type does not stop")
+    finish(client)
+
+    # A base type selects the thrown InvalidOperationException.
+    client = start({"program": PROGRAM}, exception_options=[{"filterId": "all", "condition": "ArgumentException, System.SystemException"}])
+    stopped = client.wait_event("stopped")
+    frame, _ = smoke.top_frame(client, stopped["body"]["threadId"])
+    check(stopped["body"]["reason"] == "exception" and "Fail" in frame["name"], f"stopped where the exception is thrown ({frame['name']})")
+    finish(client)
+
+
 def pause_and_resume():
     print("pause")
     client = start({"program": PROGRAM, "args": ["spin"]})
@@ -325,7 +350,8 @@ def attach():
 
 if __name__ == "__main__":
     for scenario in (stop_at_entry, function_breakpoint_and_logpoint, step_over_await, extras, integrated_terminal,
-                     set_next_statement_and_completions, lazy_properties, source_file_map, symbol_server_and_source_link, unhandled_exception, pause_and_resume, attach):
+                     set_next_statement_and_completions, lazy_properties, source_file_map, symbol_server_and_source_link, unhandled_exception, exception_filter_condition,
+                     pause_and_resume, attach):
         try:
             scenario()
         except SystemExit as error:

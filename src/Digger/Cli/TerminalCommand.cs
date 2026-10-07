@@ -9,17 +9,21 @@ using Digger.Interop.Native;
 namespace Digger.Cli;
 
 /// <summary>
-/// <c>digger debug</c>, <c>digger exec</c> and <c>digger attach</c>: parse the command line,
+/// <c>digger debug</c>, <c>digger test</c>, <c>digger exec</c> and <c>digger attach</c>: parse the command line,
 /// build if needed, and hand over to the interactive <see cref="Repl"/>.
 /// </summary>
 internal static class TerminalCommand
 {
     public const string Usage = """
-        debug options (digger debug [project] [-- args...]):
+        debug and test options (digger debug|test [project] [-- args...]):
           --configuration=name  build configuration (default Debug)
           --framework=tfm       target framework of a multi-targeted project
           --build-flags=flags   extra arguments for dotnet build, e.g. --build-flags="-p:Foo=1"
           --no-build            debug what was built last
+
+        digger test runs a Microsoft.Testing.Platform test project (xunit v3, MSTest, NUnit,
+        TUnit with the testing platform runner) as the program; arguments after -- go to it,
+        e.g. --filter-method (xunit v3) or --filter (MSTest).
 
         debug / exec / attach options:
           --wd=dir              working directory of the program (default: current directory)
@@ -73,10 +77,10 @@ internal static class TerminalCommand
             {
                 switch (name)
                 {
-                    case "--configuration" when command == "debug": configuration = Value(); break;
-                    case "--framework" or "-f" when command == "debug": framework = Value(); break;
-                    case "--build-flags" when command == "debug": buildFlags = Value(); break;
-                    case "--no-build" when command == "debug": noBuild = true; break;
+                    case "--configuration" when command is "debug" or "test": configuration = Value(); break;
+                    case "--framework" or "-f" when command is "debug" or "test": framework = Value(); break;
+                    case "--build-flags" when command is "debug" or "test": buildFlags = Value(); break;
+                    case "--no-build" when command is "debug" or "test": noBuild = true; break;
                     case "--wd": workingDirectory = Value(); break;
                     case "--init": initFile = Value(); break;
                     case "--log": logPath = Value(); break;
@@ -106,20 +110,29 @@ internal static class TerminalCommand
         DebugTarget target;
         switch (command)
         {
-            case "debug":
+            case "debug" or "test":
                 var build = new BuildSettings(positional)
                 {
                     Configuration = configuration ?? "Debug",
                     Framework = framework,
                     ExtraArguments = SplitFlags(buildFlags),
                 };
-                var program = noBuild ? ProjectBuilder.FindTargetPath(build) : ProjectBuilder.Build(build);
-                if (program is null)
+                var built = noBuild ? ProjectBuilder.FindTargetPath(build) : ProjectBuilder.Build(build);
+                if (built is null)
                 {
                     return 1;
                 }
 
-                target = new DebugTarget { Program = program, Build = build };
+                if (command == "test" && (!built.IsTestProject || !built.IsExecutable))
+                {
+                    Console.Error.WriteLine(!built.IsTestProject
+                        ? $"digger test: {Path.GetFileName(built.TargetPath)} is not a test project; use 'digger debug'"
+                        : "digger test: only Microsoft.Testing.Platform test projects (OutputType Exe) are supported; "
+                          + "enable the testing platform runner for your test framework");
+                    return 1;
+                }
+
+                target = new DebugTarget { Program = built.TargetPath, Build = build, IsTest = command == "test" };
                 break;
             case "exec":
                 if (positional is null)
@@ -158,13 +171,7 @@ internal static class TerminalCommand
         {
             try
             {
-                foreach (var line in File.ReadAllLines(initFile))
-                {
-                    if (line.Trim() is { Length: > 0 } trimmed && !trimmed.StartsWith('#'))
-                    {
-                        initialCommands.Add(trimmed);
-                    }
-                }
+                initialCommands.AddRange(Repl.ReadCommandFile(initFile));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

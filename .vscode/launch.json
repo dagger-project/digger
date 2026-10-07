@@ -1,0 +1,42 @@
+// VS Code / Cursor / VSCodium / Windsurf debug configurations for this repository. Needs the
+// Digger extension (editors/vscode/install.sh) and `digger` on PATH (scripts/install.sh).
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "HelloDebug (Digger)",
+      "type": "digger",
+      "request": "launch",
+      "preLaunchTask": "build HelloDebug",
+      "program": "${workspaceFolder}/artifacts/bin/HelloDebug/debug/HelloDebug.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "justMyCode": true
+    },
+    {
+      "name": "HelloDebug in terminal, reads stdin (Digger)",
+      "type": "digger",
+      "request": "launch",
+      "preLaunchTask": "build HelloDebug",
+      "program": "${workspaceFolder}/artifacts/bin/HelloDebug/debug/HelloDebug.dll",
+      "args": ["read"],
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "HelloTests (Digger)",
+      "type": "digger",
+      "request": "launch",
+      "preLaunchTask": "build HelloTests",
+      "program": "${workspaceFolder}/artifacts/bin/HelloTests/debug/HelloTests.dll",
+      "args": ["--filter-method", "*Divides"],
+      "env": { "TESTINGPLATFORM_TELEMETRY_OPTOUT": "1" }
+    },
+    {
+      "name": "Attach to a .NET process (Digger)",
+      "type": "digger",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    }
+  ]
+}

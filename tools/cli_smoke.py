@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end test of the terminal debugger: scripts `digger exec` / `digger debug`
-against samples/HelloDebug through stdin and checks the transcript.
+against samples/HelloDebug (and `digger test` against samples/HelloTests) through stdin and checks the transcript.
 
 Usage: tools/cli_smoke.py [path/to/digger] [--verbose]
 Exits non-zero if any expectation fails.
@@ -8,6 +8,7 @@ Exits non-zero if any expectation fails.
 import os
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIGGER = next((a for a in sys.argv[1:] if not a.startswith("--")), os.path.join(ROOT, "artifacts/bin/Digger/debug/digger"))
@@ -15,6 +16,8 @@ VERBOSE = "--verbose" in sys.argv
 PROGRAM = "artifacts/bin/HelloDebug/debug/HelloDebug.dll"
 SOURCE = os.path.join(ROOT, "samples/HelloDebug/Program.cs")
 failures = []
+# A private config directory: the user's saved config and history must not change the results.
+CONFIG_HOME = tempfile.mkdtemp(prefix="digger-cli-smoke-")
 
 
 def line_of(marker):
@@ -26,7 +29,7 @@ def line_of(marker):
 
 
 def run(args, commands):
-    env = dict(os.environ, NO_COLOR="1")
+    env = dict(os.environ, NO_COLOR="1", XDG_CONFIG_HOME=CONFIG_HOME)
     result = subprocess.run([DIGGER, *args], input="\n".join(commands) + "\n", capture_output=True,
                             text=True, cwd=ROOT, env=env, timeout=120)
     if VERBOSE:
@@ -92,6 +95,46 @@ expect("commands after exit", out, "use 'restart' to run it again")
 out = run(["exec", PROGRAM, "--", "crash"], ["continue", "print $exception.Message", "exit"])
 expect("unhandled exception stop", out, "[exception]", "System.InvalidOperationException: Something went wrong for crash")
 
+out = run(["exec", PROGRAM], ["trace -stack 1 Add", f"b {conditional} if i == 2", "on 2 print total", "breakpoints", "c",
+                               "on 2 -clear", "on 2 trace", "cond 2 i >= 8", "c", "exit"])
+expect("tracepoint prints arguments and continues", out, "Tracepoint 1 set at HelloDebug.Program.Add()",
+       "> [Tracepoint 1] HelloDebug.Program.Add(a = 7, b = 3) ./samples/HelloDebug/Program.cs:",
+       "     1  HelloDebug.Program.Main() ./samples/HelloDebug/Program.cs:", "sum = 10")
+expect("on runs commands at a stop", out, "\tprint total", "[on 2] print total\n1\n")
+expect("on trace turns a breakpoint into a tracepoint", out,
+       f"> [Tracepoint 2] HelloDebug.Program.Main() ./samples/HelloDebug/Program.cs:{conditional}\n" * 2, "has exited with status 0")
+
+out = run(["exec", PROGRAM, "--", "spin"], ["funcs Program\\.", "types Point", "b Tick", "c", "c", "c", "vars counter",
+                                           "funcs -a ^System.Console.WriteLine$", "exit"])
+expect("funcs before start", out, "HelloDebug.Program.Add\nHelloDebug.Program.ComputeAsync\n")
+expect("types", out, "(digger) types Point\nHelloDebug.Point\n")
+expect("vars reads statics", out, "HelloDebug.Program.s_counter = 1")
+expect("funcs -a searches the framework", out, "(digger) funcs -a ^System.Console.WriteLine$\nSystem.Console.WriteLine\n")
+
+script = os.path.join(CONFIG_HOME, "commands.txt")
+transcript = os.path.join(CONFIG_HOME, "transcript.txt")
+with open(script, "w") as f:
+    f.write("# a comment\nb Add\n")
+out = run(["exec", PROGRAM], ["config source-list-line-count 1", "config alias print pp", "config -save", f"source {script}",
+                              f"transcript -t {transcript}", "c", "pp a + b", "transcript -off", "exit"])
+expect("config and alias", out, "Configuration saved to", "(digger) pp a + b\n10")
+expect("source runs a command file", out, "(digger) b Add\nBreakpoint 1 set at")
+expect("source-list-line-count", out, "    117:      private static int Add(int a, int b)\n=>  118:")
+with open(transcript) as f:
+    written = f.read()
+expect("transcript", written, "(digger) c\n> [Breakpoint 1] HelloDebug.Program.Add()", "(digger) pp a + b\n10\n")
+out = run(["exec", PROGRAM], ["config -list", "exit"])
+expect("config is loaded at startup", out, "source-list-line-count   1", "alias                    pp → print")
+os.remove(os.path.join(CONFIG_HOME, "digger", "config"))
+
+out = run(["exec", PROGRAM], ["catch InvalidOperationException", "continue", "print $exception.Message", "exit"])
+expect("catch thrown exception by type", out, "Stop on thrown exceptions: InvalidOperationException", "[exception]",
+       "HelloDebug.Program.Fail(", "Something went wrong for")
+
+out = run(["exec", PROGRAM], ["catch all !System.InvalidOperationException", "catch ArgumentException", "continue", "exit"])
+expect("catch filters skip other types", out, "Stop on thrown exceptions: all types except System.InvalidOperationException",
+       "caught: Something went wrong", "has exited with status 0")
+
 out = run(["exec", PROGRAM, "--", "fail"], ["continue", "restart", "continue", "exit"])
 expect("exit status and restart", out, "has exited with status 3", "Process restarted", "HelloDebug starting\n")
 
@@ -104,6 +147,18 @@ expect("errors are reported", out, "No source file matches 'Nope.cs'", "is not a
 
 out = run(["debug", "samples/HelloDebug"], [f"b Program.cs:{step_into}", "c", "p number", "exit"])
 expect("debug builds and runs", out, "Build succeeded", f"[Breakpoint 1] HelloDebug.Program.Main()", "(digger) p number\n7")
+
+tests_source = os.path.join(ROOT, "samples/HelloTests/CalculatorTests.cs")
+with open(tests_source) as f:
+    in_divides = next(n for n, text in enumerate(f, 1) if "breakpoint in Divides" in text)
+out = run(["test", "samples/HelloTests", "--no-build", "--", "--filter-method", "*Divides"],
+          ["next", f"b CalculatorTests.cs:{in_divides}", "c", "p dividend", "c", "p dividend", "clearall", "c", "exit"])
+expect("test stops in a test", out, "set a breakpoint in a test and use 'continue'",
+       f"[Breakpoint 1] HelloTests.CalculatorTests.Divides() ./samples/HelloTests/CalculatorTests.cs:{in_divides} (hits: 1)",
+       "(digger) p dividend\n4", "(digger) p dividend\n9", "succeeded: 2", "has exited with status 0")
+
+out = run(["test", "samples/HelloDebug", "--no-build"], [])
+expect("test rejects a non-test project", out, "HelloDebug.dll is not a test project")
 
 print("FAIL" if failures else "PASS")
 sys.exit(1 if failures else 0)

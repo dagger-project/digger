@@ -3,7 +3,7 @@
 A debugger for .NET (CoreCLR) applications, written in C# 14. Use it straight from the
 terminal (`digger debug`, modeled on Go's [Delve](https://github.com/go-delve/delve)) or from
 any editor that speaks the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/):
-Zed, Neovim (nvim-dap), Helix, Emacs (dape) and others.
+VS Code and its forks (Cursor, VSCodium, Windsurf), Zed, Neovim (nvim-dap), Helix, Emacs (dape) and others.
 
 Digger talks to the runtime through `ICorDebug` (the same API used by Visual Studio and
 netcoredbg), using source-generated COM bindings, and reads portable PDBs with
@@ -13,9 +13,9 @@ netcoredbg), using source-generated COM bindings, and reads portable PDBs with
 
 | Area | Supported |
 | --- | --- |
-| Sessions | launch (`.dll` via `dotnet`, or an apphost executable), attach/detach by PID, run without debugging |
-| Breakpoints | line, conditional (`i == 5 && name != null`), hit count (`5`, `>= 5`, `% 2`), logpoints (`x = {x}`), function (`Program.Main`), pending breakpoints that bind as modules load |
-| Exceptions | break on unhandled (default) and on thrown (`all`, honours Just My Code); exception info with message, inner exceptions and stack trace |
+| Sessions | launch (`.dll` via `dotnet`, or an apphost executable), attach/detach by PID, run without debugging, debug tests (`digger test`) |
+| Breakpoints | line, conditional (`i == 5 && name != null`), hit count (`5`, `>= 5`, `% 2`), logpoints (`x = {x}`), function (`Program.Main`), pending breakpoints that bind as modules load; in the terminal also tracepoints (`trace`) and commands run on a hit (`on`) |
+| Exceptions | break on unhandled (default) and on thrown (`all`, honours Just My Code), optionally only for some types (`IOException, System.Net.*, !OperationCanceledException`, derived types included); exception info with message, inner exceptions and stack trace |
 | Stepping | over / into / out, Just My Code, compiler-hidden code skipped, **step over `await`** (resumes in the same async invocation), **step out of async methods** to the awaiting caller |
 | Stack | threads with names, async methods shown by their real name (not `MoveNext`), lambdas and local functions untangled, non-user frames de-emphasized, **async call stacks** (logical awaiting callers, with their locals) |
 | Control | set next statement (`gotoTargets`/`goto`), single-thread continue/step (other threads stay frozen) |
@@ -66,12 +66,19 @@ Breakpoint 1 set at MyApp.Program.Main() ./Program.cs:12
 | Command | |
 | --- | --- |
 | `digger debug [project] [-- args]` | build the project in the current directory (or the given directory / project file) in Debug and debug it; `--framework`, `--configuration`, `--build-flags="..."`, `--no-build` |
+| `digger test [project] [-- args]` | build a test project and debug its tests (like `dlv test`); arguments go to the test application, e.g. `-- --filter-method "*Parses*"` |
 | `digger exec <program> [-- args]` | debug a built `.dll` or apphost executable |
 | `digger attach <pid>` | attach to a running .NET process (`exit` offers to leave it running) |
 
-All three take `--wd=dir` (working directory, default: the current one) and `--init=file` (debugger
+All of them take `--wd=dir` (working directory, default: the current one) and `--init=file` (debugger
 commands to run at startup). The program shares the terminal for output; its stdin is
 `/dev/null`, so Ctrl-C reaches the debugger and pauses the program.
+
+`digger test` supports test projects that run on
+[Microsoft.Testing.Platform](https://learn.microsoft.com/dotnet/core/testing/microsoft-testing-platform-intro)
+(xunit v3, MSTest, NUnit and TUnit with the testing platform runner): such a project is a program
+of its own, so Digger builds and runs it like `digger debug` does. Set breakpoints in your tests,
+then `continue`. Projects that only run under VSTest are not supported.
 
 Commands follow Delve's names and aliases; `help` lists them and `help <command>` explains one.
 An empty line repeats the last `next`/`step`/`continue`/`list`, and Tab completes commands,
@@ -80,17 +87,86 @@ file names and expressions.
 | | |
 | --- | --- |
 | Running | `continue` (`c`) [location], `next` (`n`) [count], `step` (`s`), `stepout` (`so`), `restart` (`r`), `rebuild`, `exit` (`q`), Ctrl-C to pause |
-| Breakpoints | `break` (`b`) location [`if` condition], `breakpoints` (`bp`), `clear` id, `clearall`, `condition` (`cond`) id expr / `-hitcount` id op n, `toggle` id |
-| Data | `print` (`p`) [-x] expr, `locals` [-v], `whatis` expr, `set` var = value, `display` -a expr |
+| Breakpoints | `break` (`b`) location [`if` condition], `trace` (`t`) [-stack n] location, `on` id command, `breakpoints` (`bp`), `clear` id, `clearall`, `condition` (`cond`) id expr / `-hitcount` id op n, `toggle` id, `catch` |
+| Data | `print` (`p`) [-x] expr, `locals` [-v], `vars` [regex], `whatis` expr, `set` var = value, `display` -a expr |
 | Threads and stack | `threads`, `thread` (`tr`) id, `stack` (`bt`) [depth] [-full], `frame` n [command], `up`, `down` |
-| Other | `list` (`l`) [location], `sources` [regex], `libraries`, `help` (`h`) |
+| Other | `list` (`l`) [location], `sources` / `funcs` / `types` [-a] [regex], `libraries`, `edit` (`ed`), `config`, `source` file, `transcript` file, `help` (`h`) |
 
 Locations are `Program.cs:12` (any unique path suffix), `12` (current file), `+3`/`-3`, or a
 method: `Main`, `Program.Main`, `MyApp.Program.Main`. History is kept in
 `~/.config/digger/history`.
 
+```console
+(digger) catch InvalidOperationException       # stop where it is thrown (catch all, catch off)
+(digger) trace -stack 1 Add                       # print each call with its arguments, keep going
+> [Tracepoint 1] MyApp.Program.Add(a = 7, b = 3) ./Program.cs:118
+      1  MyApp.Program.Main() ./Program.cs:78
+(digger) on 2 print total                         # run a command every time breakpoint 2 stops
+(digger) vars counter                             # static fields of your code
+MyApp.Program.s_counter = 3
+(digger) funcs Program\.                          # methods; types lists types (-a: framework too)
+```
+
+`config` changes settings: `source-list-line-count`, `max-array-values`, `just-my-code`,
+`evaluate-properties`, `symbol-server`, `source-link`, `substitute-path <from> <to>` (like
+`sourceFileMap`) and `alias <command> <alias>`. `config -save` writes them to
+`~/.config/digger/config`, a list of `config` commands run at startup. `edit` opens the current
+line in `$DIGGER_EDITOR`, `$VISUAL` or `$EDITOR`. `transcript` copies the debugger's output to a
+file (the program writes to the terminal directly, so its own output is not included).
+
 Your programs must be built with portable PDBs (the SDK default) and, for the best
 experience, in `Debug` configuration.
+
+### VS Code, Cursor, VSCodium, Windsurf
+
+VS Code and its forks only talk to debug adapters registered by extensions, so Digger ships a
+small one in [`editors/vscode`](editors/vscode) (plain JavaScript, nothing to build). Install it with
+`editors/vscode/install.sh`. The script packages a `.vsix` and installs it with every editor command
+line it finds (`code`, `cursor`, `codium`, `windsurf`); pass one to choose, e.g.
+`editors/vscode/install.sh cursor`. You can also install the `.vsix` from the Extensions view.
+
+The extension finds `digger` via the `digger.path` setting, `$DIGGER_PATH`, `PATH`, or
+`~/.dotnet/tools/digger`. It works next to the C# extension: use `"type": "digger"` instead of
+`"coreclr"`.
+
+```jsonc
+// .vscode/launch.json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug MyApp",
+      "type": "digger",
+      "request": "launch",
+      "preLaunchTask": "build",            // a tasks.json task running `dotnet build`
+      "program": "${workspaceFolder}/bin/Debug/net10.0/MyApp.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      "console": "internalConsole"         // or "integratedTerminal" to read stdin
+    },
+    {
+      "name": "Attach",
+      "type": "digger",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    },
+    {
+      "name": "Container",                 // digger dap --server=4711 inside the container
+      "type": "digger",
+      "request": "launch",
+      "server": "localhost:4711",
+      "program": "/app/MyApp.dll",
+      "sourceFileMap": { "/src": "${workspaceFolder}" }
+    }
+  ]
+}
+```
+
+This repository's [`.vscode/launch.json`](.vscode/launch.json) and
+[`tasks.json`](.vscode/tasks.json) debug the samples. To debug tests, point `program` at the
+test project's `.dll` (a Microsoft.Testing.Platform test project is a program) and pass filter
+arguments in `args`.
 
 ### Zed
 
@@ -212,12 +288,16 @@ editor at it. In Zed, add `"tcp_connection": { "port": 4711 }` to the debug scen
 `docker exec -i <container> digger dap` (e.g. as nvim-dap's `command`). Use `sourceFileMap` to map
 the container's source paths to your checkout.
 
-Exception filters: `all` (thrown) and `unhandled` (on by default).
+Exception filters: `all` (thrown) and `unhandled` (on by default). `all` takes an optional
+condition (an exception filter option in DAP) that limits it to some exception types:
+`InvalidOperationException, System.IO.*, !OperationCanceledException`. Names can be full or
+simple, `Namespace.*` matches a namespace, derived types match too and `!` excludes.
 
 Command line (see also [Terminal](#terminal)):
 
 ```
 digger debug [project] [-- args]    build and debug in the terminal
+digger test [project] [-- args]     build and debug a test project in the terminal
 digger exec <program> [-- args]     debug a built program in the terminal
 digger attach <pid>                 attach to a process in the terminal
 digger dap                          DAP over stdin/stdout (what editors use)
@@ -240,11 +320,11 @@ tools/dap_smoke.py                # end-to-end: drives digger over DAP against s
 tools/dap_scenarios.py            # entry, pause, attach/detach, logpoints, async stepping, DebuggerDisplay,
                                   # collections, integratedTerminal, crashes
 tools/dap_smoke.py path/to/digger # same tests against e.g. the NativeAOT build
-tools/cli_smoke.py                # end-to-end: scripts the terminal debugger (digger exec / debug)
+tools/cli_smoke.py                # end-to-end: scripts the terminal debugger (digger exec / debug / test)
 ```
 
-The end-to-end scripts need Python 3 and a built `samples/HelloDebug`
-(`dotnet build` builds it).
+The end-to-end scripts need Python 3 and built `samples/HelloDebug` and `samples/HelloTests`
+(`dotnet build` builds them).
 
 Code quality settings live in [`Directory.Build.props`](Directory.Build.props) and
 [`.editorconfig`](.editorconfig): `AnalysisLevel=latest-all`, Meziantou.Analyzer, nullable
@@ -279,7 +359,9 @@ src/Digger          the digger executable and .NET tool package: DAP request han
                     terminal debugger (Cli/)
 tests/Digger.Tests  unit tests (xunit v3, Microsoft.Testing.Platform)
 samples/HelloDebug  debuggee used by the tests
+samples/HelloTests  test project for `digger test`
 tools/              end-to-end DAP test clients
+editors/vscode      VS Code / Cursor / VSCodium / Windsurf extension (plain JavaScript)
 editors/zed         Zed extension (Rust → wasm)
 scripts/install.sh  pack + install as a global tool from this checkout
 scripts/pack.sh     build the tool packages locally (CI publishes them)
@@ -292,8 +374,7 @@ Good next steps, roughly in order of value:
 
 * **Windows**: dbgshim works there, but stdio redirection and exit-code handling are Unix-only.
 * **`DebuggerTypeProxy`** attributes (`DebuggerDisplay` is supported).
-* **Debugging tests** (a Zed debug locator for `dotnet test`).
-* **Exception filters by type** (break only on / never on specific exceptions).
+* **Debugging tests from editors** (a Zed debug locator for test projects; `digger test` covers the terminal).
 * **Evaluator**: casts, `typeof`, static members via type names (`DateTime.Now`), lambdas.
 * Decompilation for frames with no source at all.
 * Data breakpoints (CoreCLR implements them on Windows only) and Hot Reload (needs a Roslyn workspace).

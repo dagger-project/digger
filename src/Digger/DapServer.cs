@@ -144,10 +144,18 @@ internal sealed class DapServer : IDebuggerEvents, ITerminalHost, IDisposable
             SupportsSingleThreadExecutionRequests = true,
             SupportsGotoTargetsRequest = true,
             SupportsCompletionsRequest = true,
+            SupportsExceptionFilterOptions = true,
             CompletionTriggerCharacters = ["."],
             ExceptionBreakpointFilters =
             [
-                new ExceptionBreakpointsFilter { Filter = "all", Label = "All Exceptions", Description = "Break when any exception is thrown (in user code when Just My Code is on)." },
+                new ExceptionBreakpointsFilter
+                {
+                    Filter = "all",
+                    Label = "All Exceptions",
+                    Description = "Break when any exception is thrown (in user code when Just My Code is on).",
+                    SupportsCondition = true,
+                    ConditionDescription = "Exception types, e.g. 'InvalidOperationException, System.IO.*, !OperationCanceledException' (derived types match too; ! excludes).",
+                },
                 new ExceptionBreakpointsFilter { Filter = "unhandled", Label = "Unhandled Exceptions", Default = true },
             ],
         }, Json.Capabilities);
@@ -283,9 +291,12 @@ internal sealed class DapServer : IDebuggerEvents, ITerminalHost, IDisposable
     private void SetExceptionBreakpoints(DapRequest request)
     {
         var arguments = request.GetArguments(Json.SetExceptionBreakpointsArguments);
+        var options = arguments.FilterOptions ?? [];
+        var all = options.Find(static o => o.FilterId == "all");
         _session.SetExceptionFilters(
-            breakOnAll: arguments.Filters.Contains("all"),
-            breakOnUnhandled: arguments.Filters.Contains("unhandled"));
+            breakOnAll: arguments.Filters.Contains("all") || all is not null,
+            breakOnUnhandled: arguments.Filters.Contains("unhandled") || options.Exists(static o => o.FilterId == "unhandled"),
+            thrownFilter: ExceptionFilter.Parse(all?.Condition));
         _connection.SendResponse(request);
     }
 

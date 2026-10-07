@@ -121,6 +121,14 @@ public sealed record SetFunctionBreakpointsArguments
 public sealed record SetExceptionBreakpointsArguments
 {
     public List<string> Filters { get; set; } = [];
+    public List<ExceptionFilterOptions>? FilterOptions { get; set; }
+}
+
+/// <summary>A filter enabled with a condition (the client set <c>supportsExceptionFilterOptions</c>).</summary>
+public sealed record ExceptionFilterOptions
+{
+    public string FilterId { get; set; } = "";
+    public string? Condition { get; set; }
 }
 
 public sealed record ThreadArguments
@@ -208,6 +216,8 @@ public sealed record ExceptionBreakpointsFilter
     public required string Label { get; init; }
     public string? Description { get; init; }
     public bool Default { get; init; }
+    public bool SupportsCondition { get; init; }
+    public string? ConditionDescription { get; init; }
 }
 
 public sealed record Capabilities
@@ -229,6 +239,7 @@ public sealed record Capabilities
     public bool SupportsSingleThreadExecutionRequests { get; init; }
     public bool SupportsGotoTargetsRequest { get; init; }
     public bool SupportsCompletionsRequest { get; init; }
+    public bool SupportsExceptionFilterOptions { get; init; }
     public List<string>? CompletionTriggerCharacters { get; init; }
 }
 

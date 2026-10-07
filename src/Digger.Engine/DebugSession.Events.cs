@@ -432,6 +432,11 @@ public sealed partial class DebugSession
         }
 
         var unhandled = e.ExceptionType == CorDebugExceptionCallbackType.Unhandled;
+        if (!unhandled && !_thrownFilter.IsEmpty && !_thrownFilter.Matches(CurrentExceptionTypeChain(e.Thread)))
+        {
+            return false;
+        }
+
         _lastExceptionBreakMode = unhandled ? "unhandled" : "always";
         var (typeName, message) = DescribeCurrentException(e.Thread);
         var text = message is null ? typeName : $"{typeName}: {message}";
@@ -451,6 +456,21 @@ public sealed partial class DebugSession
 
         var info = ValueInspector.Analyze(exception);
         return (_inspector.GetTypeName(info), ReadStringField(info, "_message"));
+    }
+
+    /// <summary>The thrown exception's type name and its base types' names, most derived first.</summary>
+    private List<string> CurrentExceptionTypeChain(ICorDebugThread thread)
+    {
+        var names = new List<string>();
+        if (thread.GetCurrentException(out var exception) >= 0 && exception is not null)
+        {
+            foreach (var type in _inspector.GetTypeChain(ValueInspector.Analyze(exception).Type))
+            {
+                names.Add(type.Name);
+            }
+        }
+
+        return names;
     }
 
     private string? ReadStringField(ValueInfo info, string name) =>

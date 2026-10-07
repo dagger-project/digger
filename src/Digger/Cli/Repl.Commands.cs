@@ -13,8 +13,6 @@ namespace Digger.Cli;
 
 internal sealed partial class Repl
 {
-    private const int MaxChildren = 64;
-
     private readonly List<Command> _commands;
     private readonly List<string> _displays = [];
     private string? _lastCommand;
@@ -60,7 +58,7 @@ internal sealed partial class Repl
         new(["step", "s"], RunningGroup, "step", "Single step through program.", args => StepCommand(StepKind.In, args)) { Repeats = true },
         new(["stepout", "so"], RunningGroup, "stepout", "Step out of the current function.", args => StepCommand(StepKind.Out, args)) { Repeats = true },
         new(["restart", "r"], RunningGroup, "restart", "Restart the process (breakpoints are kept).", Restart),
-        new(["rebuild"], RunningGroup, "rebuild", "Rebuild the project and restart the process (digger debug only).", Rebuild),
+        new(["rebuild"], RunningGroup, "rebuild", "Rebuild the project and restart the process (digger debug and test only).", Rebuild),
         new(["exit", "quit", "q"], RunningGroup, "exit", "Exit the debugger (kills a launched program).", _ => Quit(force: false)),
 
         new(["break", "b"], BreakpointGroup, "break <location> [if <condition>]", "Set a breakpoint.", Break)
@@ -75,6 +73,24 @@ internal sealed partial class Repl
                 The condition is a C# expression evaluated each time, e.g. 'break 42 if i == 10'.
                 """,
         },
+        new(["trace", "t"], BreakpointGroup, "trace [-stack <n>] <location> [if <condition>]", "Set a tracepoint.", Trace)
+        {
+            Arguments = Completes.Location,
+            Details = """
+                A tracepoint prints the function and its arguments each time it is reached, then
+                lets the program continue. -stack <n> also prints <n> frames of stack.
+                Locations are the same as for 'break'.
+                """,
+        },
+        new(["on"], BreakpointGroup, "on <id> <command>", "Execute a command when a breakpoint is hit.", On)
+        {
+            Details = """
+                on <id> print <expression>   print an expression (also locals, args, whatis, stack, display)
+                on <id> trace                turn the breakpoint into a tracepoint (print and go on)
+                on <id> cond <expression>    set the condition, like 'condition'
+                on <id> -clear               remove the commands (a tracepoint stops again)
+                """,
+        },
         new(["breakpoints", "bp"], BreakpointGroup, "breakpoints", "Print out info for active breakpoints.", _ => ListBreakpoints()),
         new(["clear"], BreakpointGroup, "clear <id>...", "Delete breakpoints.", Clear),
         new(["clearall"], BreakpointGroup, "clearall", "Delete all breakpoints.", _ => ClearAll()),
@@ -87,6 +103,19 @@ internal sealed partial class Repl
                 """,
         },
         new(["toggle"], BreakpointGroup, "toggle <id>", "Enable or disable a breakpoint.", Toggle),
+        new(["catch"], BreakpointGroup, "catch [all | off | <type>... | unhandled on|off]", "Stop when exceptions are thrown.", Catch)
+        {
+            Details = """
+                catch                        show which exceptions stop the program
+                catch all                    stop whenever an exception is thrown
+                catch <type>...              stop when one of these types (or a derived type) is thrown
+                catch off                    stop on thrown exceptions no more (unhandled ones still do)
+                catch unhandled on|off       stop on unhandled exceptions (on by default)
+                Types are full or simple names (InvalidOperationException, System.IO.IOException) or a
+                namespace (System.IO.*); !Type excludes, e.g. 'catch all !OperationCanceledException'.
+                With Just My Code, only exceptions thrown in or through your code stop.
+                """,
+        },
 
         new(["print", "p"], DataGroup, "print [-x] <expression>", "Evaluate an expression.", Print)
         {
@@ -97,6 +126,7 @@ internal sealed partial class Repl
         new(["args"], DataGroup, "args [-v]", "Same as locals: arguments are listed with the locals.", Locals),
         new(["whatis"], DataGroup, "whatis <expression>", "Print the type of an expression.", WhatIs) { Arguments = Completes.Expression },
         new(["set"], DataGroup, "set <variable> = <value>", "Change the value of a variable.", Set) { Arguments = Completes.Expression },
+        new(["vars"], DataGroup, "vars [-v] [<regex>]", "Print static variables of your code (-v expands objects).", Vars),
         new(["display"], DataGroup, "display [-a <expression>] [-d <number>]", "Print the value of an expression every time the program stops.", Display) { Arguments = Completes.Expression },
 
         new(["threads"], ThreadGroup, "threads", "Print out info for every thread.", _ => Threads()),
@@ -109,7 +139,23 @@ internal sealed partial class Repl
 
         new(["list", "ls", "l"], OtherGroup, "list [<location>]", "Show source code.", List) { Repeats = true, Arguments = Completes.Location },
         new(["sources"], OtherGroup, "sources [<regex>]", "Print list of source files.", Sources),
+        new(["funcs"], OtherGroup, "funcs [-a] [<regex>]", "Print list of functions (-a includes framework assemblies).", Funcs),
+        new(["types"], OtherGroup, "types [-a] [<regex>]", "Print list of types (-a includes framework assemblies).", Types),
         new(["libraries", "modules"], OtherGroup, "libraries", "List loaded assemblies.", _ => Libraries()),
+        new(["config"], OtherGroup, "config [-list | -save | <setting> [<value>]]", "Change configuration parameters.", Config)
+        {
+            Details = """
+                config -list                          show every setting
+                config <setting> <value>              change a setting, e.g. 'config max-array-values 100'
+                config -save                          save the settings to ~/.config/digger/config (run at startup)
+                config substitute-path <from> <to>    map a build-time source path prefix to a local one
+                config substitute-path <from>         remove a rule ('-clear' removes all)
+                config alias <command> <alias>        add an alias ('config alias <alias>' removes it)
+                """,
+        },
+        new(["source"], OtherGroup, "source <file>", "Execute a file containing a list of debugger commands.", Source),
+        new(["edit", "ed"], OtherGroup, "edit [<location>]", "Open the current location (or another one) in $EDITOR.", Edit) { Arguments = Completes.Location },
+        new(["transcript"], OtherGroup, "transcript [-t] <file> | -off", "Append the session's output to a file (-t truncates it first).", TranscriptCommand),
         new(["help", "h"], OtherGroup, "help [<command>]", "Prints the help message.", Help),
     ];
 
@@ -155,7 +201,15 @@ internal sealed partial class Repl
         }
     }
 
-    private Command? FindCommand(string name) => _commands.Find(c => c.Names.Contains(name, StringComparer.Ordinal));
+    private Command? FindCommand(string name)
+    {
+        if (_aliases.TryGetValue(name, out var target))
+        {
+            name = target;
+        }
+
+        return _commands.Find(c => c.Names.Contains(name, StringComparer.Ordinal));
+    }
 
     // ---- Running ------------------------------------------------------------------------
 
@@ -191,6 +245,11 @@ internal sealed partial class Repl
 
     private void StepCommand(StepKind kind, string arguments)
     {
+        if (_state == State.NotStarted && _target.IsTest)
+        {
+            throw new CommandException("The tests start in the test framework's generated Main; set a breakpoint in a test and use 'continue'.");
+        }
+
         if (_state == State.NotStarted)
         {
             // Like the first 'next' in Delve: start the program and stop at the top of Main.
@@ -229,13 +288,13 @@ internal sealed partial class Repl
     {
         if (_target.Build is not { } build)
         {
-            throw new InvalidOperationException("rebuild only works with 'digger debug'.");
+            throw new InvalidOperationException("rebuild only works with 'digger debug' and 'digger test'.");
         }
 
         EndSession(terminate: true);
         _program?.Dispose();
         _program = null;
-        if (ProjectBuilder.Build(build) is not { } program)
+        if (ProjectBuilder.Build(build)?.TargetPath is not { } program)
         {
             throw new InvalidOperationException("The build failed; fix it and run 'rebuild' again.");
         }
@@ -291,6 +350,10 @@ internal sealed partial class Repl
 
         PrintSourceAround(CurrentFrame());
         PrintDisplays();
+        if (stop is not null)
+        {
+            RunOnCommands(HitBreakpoints(stop));
+        }
     }
 
     private string HitTag(StopInfo stop)
@@ -358,7 +421,7 @@ internal sealed partial class Repl
     {
         if (frame?.SourcePath is { } path)
         {
-            PrintSource(path, frame.Line - 5, frame.Line + 5, current: frame.Line);
+            PrintSource(path, frame.Line - _sourceListLineCount, frame.Line + _sourceListLineCount, current: frame.Line);
         }
     }
 
@@ -402,7 +465,7 @@ internal sealed partial class Repl
         {
             if (_listing is { } listing)
             {
-                PrintSource(listing.Path, listing.Next, listing.Next + 10, current: CurrentLineIfStopped(listing.Path));
+                PrintSource(listing.Path, listing.Next, listing.Next + (2 * _sourceListLineCount), current: CurrentLineIfStopped(listing.Path));
             }
 
             return;
@@ -424,10 +487,72 @@ internal sealed partial class Repl
         var (path, line) = location.Function is { } function
             ? ResolveFunctionInProgram(function) ?? throw new CommandException($"Function '{function}' was not found in the program.")
             : (location.Path!, location.Line);
-        PrintSource(path, line - 5, line + 5, current: CurrentLineIfStopped(path) is var here && Math.Abs(here - line) <= 5 ? here : 0);
+        PrintSource(path, line - _sourceListLineCount, line + _sourceListLineCount,
+            current: CurrentLineIfStopped(path) is var here && Math.Abs(here - line) <= _sourceListLineCount ? here : 0);
     }
 
     private int CurrentLineIfStopped(string path) => CurrentLine() is { } current && current.Path == path ? current.Line : 0;
+
+    private void Funcs(string arguments) => PrintCatalog(arguments, static (session, filter, all) => session.FindFunctions(filter, !all), static (metadata, type) =>
+        metadata.GetMethods(type).Where(static m => !m.Name.Contains('<', StringComparison.Ordinal)).Select(m => metadata.GetTypeName(type) + "." + m.Name));
+
+    private void Types(string arguments) => PrintCatalog(arguments, static (session, filter, all) => session.FindTypes(filter, !all), static (metadata, type) =>
+        [metadata.GetTypeName(type)]);
+
+    /// <summary>
+    /// funcs / types: from every loaded module once the program runs, from the program's own
+    /// assembly before that.
+    /// </summary>
+    private void PrintCatalog(
+        string arguments,
+        Func<DebugSession, Func<string, bool>, bool, List<string>> fromSession,
+        Func<Digger.Engine.Symbols.ModuleMetadata, uint, IEnumerable<string>> fromProgram)
+    {
+        var (all, filter) = ParseListFilter(arguments, "-a");
+        List<string> names;
+        if (_session is { } session && _state is State.Stopped or State.Running)
+        {
+            names = Engine(() => fromSession(session, filter, all));
+        }
+        else
+        {
+            var program = _program ?? throw new InvalidOperationException("The program is not running yet and its assembly could not be read.");
+            names = [.. program.GetTypeTokens().SelectMany(type => fromProgram(program, type)).Where(filter).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+        }
+
+        foreach (var name in names)
+        {
+            Console.WriteLine(name);
+        }
+    }
+
+    private void Vars(string arguments)
+    {
+        var (verbose, filter) = ParseListFilter(arguments, "-v");
+        var session = RequireStopped();
+        foreach (var variable in Engine(() => session.GetStaticVariables(filter, hex: false)))
+        {
+            Console.WriteLine($"{variable.Name} = {FormatValue(variable)}");
+            if (verbose)
+            {
+                PrintChildren(session, variable, "  ", hex: false);
+            }
+        }
+    }
+
+    /// <summary>Parses <c>[flag] [regex]</c>.</summary>
+    private static (bool Flag, Func<string, bool> Filter) ParseListFilter(string arguments, string flag)
+    {
+        var hasFlag = arguments == flag || arguments.StartsWith(flag + " ", StringComparison.Ordinal);
+        var pattern = (hasFlag ? arguments[flag.Length..] : arguments).Trim();
+        if (pattern.Length == 0)
+        {
+            return (hasFlag, static _ => true);
+        }
+
+        var regex = new Regex(pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        return (hasFlag, regex.IsMatch);
+    }
 
     private void Sources(string arguments)
     {
@@ -457,6 +582,13 @@ internal sealed partial class Repl
 
     private void Break(string arguments)
     {
+        var breakpoint = AddBreakpoint(arguments, "break");
+        Console.WriteLine($"Breakpoint {breakpoint.Id} set at {DescribeBreakpoint(breakpoint)}");
+    }
+
+    /// <summary>Parses <c>[location] [if condition]</c> and adds the breakpoint.</summary>
+    private CliBreakpoint AddBreakpoint(string arguments, string command)
+    {
         string? condition = null;
         var ifIndex = arguments.IndexOf(" if ", StringComparison.Ordinal);
         if (ifIndex >= 0)
@@ -468,12 +600,63 @@ internal sealed partial class Repl
         if (arguments.Trim().Length == 0)
         {
             // Delve's bare 'break' sets a breakpoint at the current line.
-            var (path, line) = CurrentLine() ?? throw new CommandException("break needs a location, e.g. 'break Program.cs:12'.");
+            var (path, line) = CurrentLine() ?? throw new CommandException($"{command} needs a location, e.g. '{command} Program.cs:12'.");
             arguments = $"{path}:{line}";
         }
 
-        var breakpoint = AddBreakpoint(ParseLocation(arguments), condition, temporary: false);
-        Console.WriteLine($"Breakpoint {breakpoint.Id} set at {DescribeBreakpoint(breakpoint)}");
+        return AddBreakpoint(ParseLocation(arguments), condition, temporary: false);
+    }
+
+    private void Trace(string arguments)
+    {
+        var stack = 0;
+        if (arguments.StartsWith("-stack ", StringComparison.Ordinal))
+        {
+            var parts = arguments.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+            stack = parts.Length > 1 ? ParseCount(parts[1]) : 0;
+            arguments = parts.Length > 2 ? parts[2] : "";
+        }
+
+        var breakpoint = AddBreakpoint(arguments, "trace");
+        breakpoint.Tracepoint = true;
+        breakpoint.TraceStack = stack;
+        Console.WriteLine($"Tracepoint {breakpoint.Id} set at {DescribeBreakpoint(breakpoint)}");
+    }
+
+    /// <summary>Commands <c>on</c> accepts: the ones that only look at the stopped program.</summary>
+    private static readonly HashSet<string> OnCommandNames = new(["print", "locals", "args", "whatis", "stack", "display"], StringComparer.Ordinal);
+
+    private void On(string arguments)
+    {
+        var parts = arguments.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length < 2)
+        {
+            throw new CommandException("usage: on <id> <command>");
+        }
+
+        var breakpoint = FindBreakpoint(parts[0]);
+        var command = parts[1];
+        var name = command.Split(' ', 2)[0];
+        switch (name)
+        {
+            case "-clear":
+                breakpoint.OnCommands.Clear();
+                breakpoint.Tracepoint = false;
+                return;
+            case "trace":
+                breakpoint.Tracepoint = true;
+                return;
+            case "cond" or "condition":
+                Condition($"{breakpoint.Id} {command[name.Length..].Trim()}");
+                return;
+        }
+
+        if (FindCommand(name) is not { } found || !OnCommandNames.Contains(found.Names[0]))
+        {
+            throw new CommandException($"'{name}' cannot run on a breakpoint; use print, locals, args, whatis, stack, display, trace or cond.");
+        }
+
+        breakpoint.OnCommands.Add(command);
     }
 
     private void ListBreakpoints()
@@ -483,7 +666,8 @@ internal sealed partial class Repl
         {
             any = true;
             var state = breakpoint.Enabled ? "" : Ansi.Yellow(" (disabled)");
-            Console.WriteLine($"Breakpoint {breakpoint.Id}{state} at {DescribeBreakpoint(breakpoint)} {Ansi.Dim($"(hits: {breakpoint.Hits})")}");
+            var kind = breakpoint.Tracepoint ? "Tracepoint" : "Breakpoint";
+            Console.WriteLine($"{kind} {breakpoint.Id}{state} at {DescribeBreakpoint(breakpoint)} {Ansi.Dim($"(hits: {breakpoint.Hits})")}");
             if (breakpoint.Condition is { } condition)
             {
                 Console.WriteLine($"\tcond {condition}");
@@ -492,6 +676,11 @@ internal sealed partial class Repl
             if (breakpoint.HitCondition is { } hitCondition)
             {
                 Console.WriteLine($"\tcond -hitcount {hitCondition}");
+            }
+
+            foreach (var command in breakpoint.OnCommands)
+            {
+                Console.WriteLine($"\t{command}");
             }
         }
 
@@ -646,7 +835,7 @@ internal sealed partial class Repl
             return;
         }
 
-        var count = parent.IndexedCount > 0 ? Math.Min(parent.IndexedCount, MaxChildren) : 0;
+        var count = parent.IndexedCount > 0 ? Math.Min(parent.IndexedCount, _maxArrayValues) : 0;
         var children = Engine(() => session.GetVariables(parent.Reference, 0, count, hex));
         foreach (var child in children)
         {
@@ -658,9 +847,9 @@ internal sealed partial class Repl
             Console.WriteLine($"{indent}{child.Name}: {FormatValue(child)}");
         }
 
-        if (parent.IndexedCount > MaxChildren)
+        if (parent.IndexedCount > _maxArrayValues)
         {
-            Console.WriteLine($"{indent}{Ansi.Dim($"... +{parent.IndexedCount - MaxChildren} more")}");
+            Console.WriteLine($"{indent}{Ansi.Dim($"... +{parent.IndexedCount - _maxArrayValues} more")}");
         }
     }
 

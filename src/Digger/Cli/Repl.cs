@@ -23,13 +23,16 @@ internal sealed record DebugTarget
 
     public int ProcessId { get; init; }
 
-    /// <summary>Set for <c>digger debug</c>: lets <c>rebuild</c> build the project again.</summary>
+    /// <summary>Set for <c>digger debug</c> and <c>test</c>: lets <c>rebuild</c> build the project again.</summary>
     public BuildSettings? Build { get; init; }
+
+    /// <summary>A test project (<c>digger test</c>): its Main is generated, so there is no entry to stop at.</summary>
+    public bool IsTest { get; init; }
 }
 
 /// <summary>
-/// The interactive, Delve-style terminal debugger behind <c>digger debug</c>, <c>exec</c> and
-/// <c>attach</c>. It runs on the main thread and drives <see cref="DebugSession"/> on the
+/// The interactive, Delve-style terminal debugger behind <c>digger debug</c>, <c>test</c>,
+/// <c>exec</c> and <c>attach</c>. It runs on the main thread and drives <see cref="DebugSession"/> on the
 /// engine thread; the debuggee shares the terminal for output.
 /// </summary>
 internal sealed partial class Repl : IDisposable
@@ -85,6 +88,7 @@ internal sealed partial class Repl : IDisposable
         }
 
         Console.WriteLine("Type 'help' for list of commands.");
+        LoadConfig();
         if (IsAttach && !TryAttach())
         {
             return 1;
@@ -102,7 +106,7 @@ internal sealed partial class Repl : IDisposable
 
         while (!_quit)
         {
-            var line = _editor.ReadLine(Ansi.Bold("(digger) "));
+            var line = ReadLine(Ansi.Bold("(digger) "));
             if (line is null)
             {
                 Quit(force: false);
@@ -160,8 +164,11 @@ internal sealed partial class Repl : IDisposable
                     WorkingDirectory = _target.WorkingDirectory,
                     StopAtEntry = stopAtEntry,
                     IsolateFromTerminal = true,
+
+                    // The testing platform logs its telemetry through Debugger.Log when a debugger is attached.
+                    Environment = _target.IsTest ? new Dictionary<string, string?>(StringComparer.Ordinal) { ["TESTINGPLATFORM_TELEMETRY_OPTOUT"] = "1" } : null,
                 },
-                new SessionOptions());
+                CreateSessionOptions());
             session.ConfigurationDone();
         });
         _state = State.Running;
@@ -176,7 +183,7 @@ internal sealed partial class Repl : IDisposable
             Engine(() =>
             {
                 ApplyAllBreakpoints(session);
-                session.Attach(_target.ProcessId, new SessionOptions());
+                session.Attach(_target.ProcessId, CreateSessionOptions());
                 session.ConfigurationDone();
             });
         }
@@ -261,7 +268,7 @@ internal sealed partial class Repl : IDisposable
 
     private bool Confirm(string question, bool defaultYes)
     {
-        var answer = _editor.ReadLine(question)?.Trim().ToUpperInvariant();
+        var answer = ReadLine(question)?.Trim().ToUpperInvariant();
         return answer switch
         {
             null or "" => defaultYes,
@@ -291,23 +298,35 @@ internal sealed partial class Repl : IDisposable
         return WaitForStop();
     }
 
+    /// <summary>Waits for a stop the user should see: tracepoints print and resume on their own.</summary>
     private StopInfo? WaitForStop()
     {
-        var next = _runEvents.Take();
-        if (next.Stop is not { } stop)
+        while (true)
         {
-            _state = State.Exited;
-            Console.WriteLine($"Process {_processId} has exited with status {_exitCode}");
-            return null;
-        }
+            var next = _runEvents.Take();
+            if (next.Stop is not { } stop)
+            {
+                _state = State.Exited;
+                Console.WriteLine($"Process {_processId} has exited with status {_exitCode}");
+                return null;
+            }
 
-        _state = State.Stopped;
-        _lastStop = stop;
-        _threadId = stop.ThreadId;
-        _frameIndex = 0;
-        _frames = null;
-        CountHits(stop);
-        return stop;
+            _state = State.Stopped;
+            _lastStop = stop;
+            _threadId = stop.ThreadId;
+            _frameIndex = 0;
+            _frames = null;
+            CountHits(stop);
+            if (TracepointsOnly(stop) is not { } tracepoints || _session is not { } session)
+            {
+                return stop;
+            }
+
+            PrintTrace(tracepoints);
+            ClearStop();
+            _state = State.Running;
+            Engine(() => session.Continue());
+        }
     }
 
     private void DrainEvents()
@@ -457,7 +476,10 @@ internal sealed partial class Repl : IDisposable
         }
     }
 
-    private static string? HistoryPath()
+    private static string? HistoryPath() => ConfigDirectory() is { } directory ? Path.Combine(directory, "history") : null;
+
+    /// <summary><c>$XDG_CONFIG_HOME/digger</c> or <c>~/.config/digger</c>.</summary>
+    private static string? ConfigDirectory()
     {
         var config = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         if (string.IsNullOrEmpty(config))
@@ -471,12 +493,13 @@ internal sealed partial class Repl : IDisposable
             config = Path.Combine(home, ".config");
         }
 
-        return Path.Combine(config, "digger", "history");
+        return Path.Combine(config, "digger");
     }
 
     public void Dispose()
     {
         _interrupt?.Dispose();
+        StopTranscript();
         EndSession(terminate: !IsAttach); // disposes the session
 
         _program?.Dispose();

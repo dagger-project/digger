@@ -16,11 +16,17 @@ internal sealed record BuildSettings(string? Project)
     public IReadOnlyList<string> ExtraArguments { get; init; } = [];
 }
 
+/// <summary>What a build produced.</summary>
+/// <param name="TargetPath">The built assembly.</param>
+/// <param name="IsExecutable">Whether it runs on its own (OutputType Exe), unlike a VSTest test library.</param>
+/// <param name="IsTestProject">Whether the project is a test project.</param>
+internal sealed record BuiltProject(string TargetPath, bool IsExecutable, bool IsTestProject);
+
 /// <summary>Builds a project with <c>dotnet build</c> and finds the assembly it produced.</summary>
 internal static class ProjectBuilder
 {
-    /// <summary>Builds and returns the program path, or null (with the reason printed) on failure.</summary>
-    public static string? Build(BuildSettings settings)
+    /// <summary>Builds and returns what was built, or null (with the reason printed) on failure.</summary>
+    public static BuiltProject? Build(BuildSettings settings)
     {
         var dotnet = DotnetLocator.Find(null) ?? "dotnet";
         List<string> common = [];
@@ -47,7 +53,7 @@ internal static class ProjectBuilder
     }
 
     /// <summary>The built assembly of an already-built project.</summary>
-    public static string? FindTargetPath(BuildSettings settings)
+    public static BuiltProject? FindTargetPath(BuildSettings settings)
     {
         var dotnet = DotnetLocator.Find(null) ?? "dotnet";
         List<string> common = settings.Project is { } project ? [project] : [];
@@ -61,9 +67,12 @@ internal static class ProjectBuilder
         return FindTargetPath(dotnet, common);
     }
 
-    private static string? FindTargetPath(string dotnet, List<string> common)
+    private static BuiltProject? FindTargetPath(string dotnet, List<string> common)
     {
-        var (exitCode, output) = Run(dotnet, ["msbuild", "-nologo", "-getProperty:TargetPath", "-getProperty:TargetFrameworks", .. common], captureOutput: true);
+        var (exitCode, output) = Run(
+            dotnet,
+            ["msbuild", "-nologo", "-getProperty:TargetPath", "-getProperty:TargetFrameworks", "-getProperty:OutputType", "-getProperty:IsTestProject", .. common],
+            captureOutput: true);
         if (exitCode != 0)
         {
             Console.Error.Write(output);
@@ -71,7 +80,9 @@ internal static class ProjectBuilder
             return null;
         }
 
-        var (targetPath, targetFrameworks) = ParseProperties(output);
+        var properties = ParseProperties(output);
+        var targetPath = properties.GetValueOrDefault("TargetPath");
+        var targetFrameworks = properties.GetValueOrDefault("TargetFrameworks");
         if (string.IsNullOrEmpty(targetPath))
         {
             Console.Error.WriteLine(string.IsNullOrEmpty(targetFrameworks)
@@ -86,27 +97,32 @@ internal static class ProjectBuilder
             return null;
         }
 
-        return targetPath;
+        return new BuiltProject(
+            targetPath,
+            IsExecutable: properties.GetValueOrDefault("OutputType") is { } outputType && !outputType.Equals("Library", StringComparison.OrdinalIgnoreCase),
+            IsTestProject: string.Equals(properties.GetValueOrDefault("IsTestProject"), "true", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Reads the JSON that <c>-getProperty</c> prints for several properties.</summary>
-    internal static (string? TargetPath, string? TargetFrameworks) ParseProperties(string output)
+    internal static Dictionary<string, string?> ParseProperties(string output)
     {
+        var result = new Dictionary<string, string?>(StringComparer.Ordinal);
         var start = output.IndexOf('{', StringComparison.Ordinal);
         if (start < 0)
         {
-            return (null, null);
+            return result;
         }
 
         using var document = System.Text.Json.JsonDocument.Parse(output[start..]);
-        if (!document.RootElement.TryGetProperty("Properties", out var properties))
+        if (document.RootElement.TryGetProperty("Properties", out var properties))
         {
-            return (null, null);
+            foreach (var property in properties.EnumerateObject())
+            {
+                result[property.Name] = property.Value.GetString();
+            }
         }
 
-        return (Get("TargetPath"), Get("TargetFrameworks"));
-
-        string? Get(string name) => properties.TryGetProperty(name, out var value) ? value.GetString() : null;
+        return result;
     }
 
     private static (int ExitCode, string Output) Run(string fileName, IEnumerable<string> arguments, bool captureOutput)

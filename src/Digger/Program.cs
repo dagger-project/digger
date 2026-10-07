@@ -16,6 +16,7 @@ using Digger.Protocol;
 //
 //   digger debug [project] [-- args]   build and debug a project in the terminal (like `dlv debug`)
 //   digger exec <program> [-- args]    debug a built program in the terminal (like `dlv exec`)
+//   digger test [project] [-- args]    build and debug a test project in the terminal (like `dlv test`)
 //   digger attach <pid>                attach to a running process in the terminal
 //   digger dap                         speak DAP over stdin/stdout (what editors run)
 //   digger dap --server[=4711]         listen on a TCP port instead (handy for debugging digger)
@@ -32,6 +33,7 @@ const string Usage = """
     commands:
       debug     build the project in the current directory (or the given one) and debug it
       exec      debug an already built program (.dll or apphost executable)
+      test      build a test project and debug its tests
       attach    attach to a running .NET process
       dap       run a Debug Adapter Protocol server for an editor, over stdin/stdout
       version   print the version
@@ -41,6 +43,7 @@ const string Usage = """
       digger debug                              build ./ and debug it
       digger debug src/MyApp -- --port 8080     arguments after -- go to the program
       digger exec bin/Debug/net10.0/MyApp.dll
+      digger test tests/MyApp.Tests -- --filter-method "*Parses*"
       digger attach 1234
 
     dap options:
@@ -63,7 +66,7 @@ switch (args.Length > 0 ? args[0] : "help")
 {
     case "dap":
         break;
-    case "debug" or "exec" or "attach":
+    case "debug" or "exec" or "attach" or "test":
         return TerminalCommand.Run(args[0], args[1..]);
     case "version" or "--version":
         await Console.Out.WriteLineAsync(typeof(DapServer).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0");

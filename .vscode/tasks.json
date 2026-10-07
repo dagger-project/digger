@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build HelloDebug",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "samples/HelloDebug"],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "build HelloTests",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "samples/HelloTests"],
+      "problemMatcher": "$msCompile"
+    }
+  ]
+}

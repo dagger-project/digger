@@ -17,6 +17,11 @@ internal sealed partial class Repl
     private readonly Dictionary<string, string[]> _moduleSources = new(StringComparer.Ordinal);
     private int _nextBreakpointId = 1;
 
+    // Exception stops ('catch'): thrown ones are off by default, unhandled ones on.
+    private bool _catchThrown;
+    private bool _catchUnhandled = true;
+    private ExceptionFilter _catchFilter = ExceptionFilter.All;
+
     /// <summary>A breakpoint as the user sees it. Ids are stable across restarts.</summary>
     private sealed class CliBreakpoint
     {
@@ -49,6 +54,15 @@ internal sealed partial class Repl
         public string? Method { get; set; }
 
         public bool Verified { get; set; }
+
+        /// <summary>Prints the function and its arguments when hit, then lets the program go on (<c>trace</c>).</summary>
+        public bool Tracepoint { get; set; }
+
+        /// <summary>Frames of stack a tracepoint prints (<c>trace -stack n</c>).</summary>
+        public int TraceStack { get; set; }
+
+        /// <summary>Commands to run when hit (<c>on</c>).</summary>
+        public List<string> OnCommands { get; } = [];
     }
 
     /// <summary>A parsed location: a source line or a function name.</summary>
@@ -338,6 +352,7 @@ internal sealed partial class Repl
     /// <summary>Engine thread: sends every breakpoint to a new session.</summary>
     private void ApplyAllBreakpoints(DebugSession session)
     {
+        session.SetExceptionFilters(_catchThrown, _catchUnhandled, _catchFilter);
         _byEngineId.Clear();
         foreach (var path in _breakpoints.Where(b => b.Path is not null).Select(b => b.Path!).Distinct(StringComparer.Ordinal).ToList())
         {
@@ -464,5 +479,110 @@ internal sealed partial class Repl
         var where = $"{DisplayPath(breakpoint.Path!)}:{line}";
         var method = breakpoint.Method is { } name ? FunctionName(name) + " " : "";
         return breakpoint.Verified ? method + where : where + " (pending)";
+    }
+
+    // ---- Tracepoints and 'on' commands --------------------------------------------------
+
+    /// <summary>The tracepoints behind a breakpoint stop, or null if anything else is involved.</summary>
+    private List<CliBreakpoint>? TracepointsOnly(StopInfo stop)
+    {
+        if (stop.Reason is not (StopReason.Breakpoint or StopReason.FunctionBreakpoint))
+        {
+            return null;
+        }
+
+        var hits = HitBreakpoints(stop);
+        return hits.Count > 0 && hits.TrueForAll(static b => b.Tracepoint) ? hits : null;
+    }
+
+    /// <summary>Delve-style trace line: <c>> [Tracepoint 2] Program.Add(a = 1, b = 2) ./Program.cs:110</c>.</summary>
+    private void PrintTrace(List<CliBreakpoint> tracepoints)
+    {
+        var frames = Frames();
+        if (frames.Count == 0 || _session is not { } session)
+        {
+            return;
+        }
+
+        var frame = frames[0];
+        var arguments = Engine(() =>
+        {
+            var names = session.GetParameterNames(frame.Id);
+            if (names.Length == 0)
+            {
+                return "";
+            }
+
+            var scopes = session.GetScopes(frame.Id);
+            var values = scopes.Count == 0 ? [] : session.GetVariables(scopes[0].Reference, 0, 0, hex: false);
+            return string.Join(", ", names.Select(name => $"{name} = {values.Find(v => v.Name == name)?.Value ?? "?"}"));
+        });
+
+        var ids = string.Join(", ", tracepoints.Select(static b => b.Id));
+        var name = frame.Name.Contains('(', StringComparison.Ordinal) ? frame.Name[..frame.Name.IndexOf('(', StringComparison.Ordinal)] : frame.Name;
+        var where = frame.SourcePath is { } path ? $" {DisplayPath(path)}:{frame.Line}" : "";
+        Console.WriteLine($"> {Ansi.Dim($"[Tracepoint {ids}]")} {Ansi.Bold(name)}({arguments}){where}");
+
+        var depth = tracepoints.Max(static b => b.TraceStack);
+        for (var i = 1; i <= depth && i < frames.Count; i++)
+        {
+            var caller = frames[i];
+            var at = caller.SourcePath is { } callerPath ? $" {DisplayPath(callerPath)}:{caller.Line}" : "";
+            Console.WriteLine(Ansi.Dim($"    {i,2}  {FunctionName(caller.Name)}{at}"));
+        }
+
+        RunOnCommands(tracepoints);
+    }
+
+    /// <summary>Runs the <c>on</c> commands of the breakpoints that were hit.</summary>
+    private void RunOnCommands(List<CliBreakpoint> hits)
+    {
+        foreach (var breakpoint in hits)
+        {
+            foreach (var command in breakpoint.OnCommands)
+            {
+                // Like an init file, but without disturbing what an empty line repeats.
+                var (lastCommand, listing) = (_lastCommand, _listing);
+                Console.WriteLine(Ansi.Dim($"[on {breakpoint.Id}] {command}"));
+                Execute(command);
+                (_lastCommand, _listing) = (lastCommand, listing);
+            }
+        }
+    }
+
+    // ---- Exceptions ---------------------------------------------------------------------
+
+    private void Catch(string arguments)
+    {
+        var words = arguments.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        switch (words)
+        {
+            case []:
+                break;
+            case ["off" or "-clear"]:
+                (_catchThrown, _catchFilter) = (false, ExceptionFilter.All);
+                break;
+            case ["unhandled", "on" or "off"]:
+                _catchUnhandled = words[1] == "on";
+                break;
+            case ["unhandled", ..]:
+                throw new CommandException("usage: catch unhandled on|off");
+            case ["all", .. var rest]:
+                (_catchThrown, _catchFilter) = (true, ExceptionFilter.Parse(rest));
+                break;
+            default:
+                (_catchThrown, _catchFilter) = (true, ExceptionFilter.Parse(words));
+                break;
+        }
+
+        if (_session is { } session && _state is State.Stopped or State.Running)
+        {
+            var (thrown, unhandled, filter) = (_catchThrown, _catchUnhandled, _catchFilter);
+            Engine(() => session.SetExceptionFilters(thrown, unhandled, filter));
+        }
+
+        var thrownText = _catchThrown ? _catchFilter.ToString() : "off";
+        Console.WriteLine($"Stop on thrown exceptions: {thrownText}");
+        Console.WriteLine($"Stop on unhandled exceptions: {(_catchUnhandled ? "on" : "off")}");
     }
 }

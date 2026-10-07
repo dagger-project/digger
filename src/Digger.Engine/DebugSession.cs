@@ -51,6 +51,7 @@ public sealed partial class DebugSession : ICallbackSink, IDisposable
     private bool _configurationDone;
     private bool _breakOnAllExceptions;
     private bool _breakOnUnhandledExceptions = true;
+    private ExceptionFilter _thrownFilter = ExceptionFilter.All;
     private bool _entryBreakpointSet;
     private UserBreakpoint? _entryBreakpoint;
     private int _lastStoppedThreadId;
@@ -597,10 +598,15 @@ public sealed partial class DebugSession : ICallbackSink, IDisposable
 
     // ---- Exceptions -------------------------------------------------------------------
 
-    public void SetExceptionFilters(bool breakOnAll, bool breakOnUnhandled)
+    /// <summary>
+    /// <paramref name="thrownFilter"/> narrows <paramref name="breakOnAll"/> to some exception
+    /// types (see <see cref="ExceptionFilter"/>); unhandled exceptions are never filtered.
+    /// </summary>
+    public void SetExceptionFilters(bool breakOnAll, bool breakOnUnhandled, ExceptionFilter? thrownFilter = null)
     {
         _breakOnAllExceptions = breakOnAll;
         _breakOnUnhandledExceptions = breakOnUnhandled;
+        _thrownFilter = thrownFilter ?? ExceptionFilter.All;
     }
 
     // ---- Threads ----------------------------------------------------------------------

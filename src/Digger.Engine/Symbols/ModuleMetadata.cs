@@ -507,6 +507,30 @@ public sealed class ModuleMetadata : IDisposable
         }
     }
 
+    /// <summary>
+    /// TypeDef tokens of the types a person wrote or uses: <c>&lt;Module&gt;</c> and
+    /// compiler-generated types (closures, state machines, ...) are left out.
+    /// </summary>
+    public IEnumerable<uint> GetTypeTokens()
+    {
+        foreach (var handle in Reader.TypeDefinitions)
+        {
+            var definition = Reader.GetTypeDefinition(handle);
+            var name = Reader.GetString(definition.Name);
+            if (name == "<Module>" || name.Contains('<', StringComparison.Ordinal)
+                || (definition.IsNested && GetTypeName((uint)MetadataTokens.GetToken(definition.GetDeclaringType())).Contains('<', StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            yield return (uint)MetadataTokens.GetToken(handle);
+        }
+    }
+
+    /// <summary>Whether the type has generic parameters (its statics exist per instantiation).</summary>
+    public bool IsGenericType(uint typeDefToken) =>
+        Reader.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(RowOf(typeDefToken))).GetGenericParameters().Count > 0;
+
     public bool IsFlagsEnum(uint typeDefToken)
     {
         var type = Reader.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(RowOf(typeDefToken)));

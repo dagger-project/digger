@@ -1,0 +1,139 @@
+{
+  "name": "digger",
+  "displayName": "Digger (.NET Debugger)",
+  "description": "Debug .NET (CoreCLR) applications with the Digger debug adapter. Works in VS Code, Cursor, VSCodium, Windsurf and other VS Code forks.",
+  "version": "0.1.0",
+  "publisher": "digger",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/digger-project/digger" },
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Debuggers"],
+  "keywords": ["dotnet", ".NET", "C#", "debugger", "coreclr"],
+  "main": "./extension.js",
+  "activationEvents": ["onDebugResolve:digger", "onDebugDynamicConfigurations:digger", "onCommand:digger.pickProcess"],
+  "contributes": {
+    "configuration": {
+      "title": "Digger",
+      "properties": {
+        "digger.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the digger executable. Empty: $DIGGER_PATH, then digger on PATH, then ~/.dotnet/tools/digger."
+        }
+      }
+    },
+    "commands": [{ "command": "digger.pickProcess", "title": "Digger: Pick a .NET Process" }],
+    "breakpoints": [{ "language": "csharp" }, { "language": "fsharp" }, { "language": "vb" }],
+    "debuggers": [
+      {
+        "type": "digger",
+        "label": "Digger (.NET)",
+        "languages": ["csharp", "fsharp", "vb"],
+        "variables": { "pickProcess": "digger.pickProcess" },
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "The built .dll (run with dotnet) or apphost executable." },
+              "args": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Command line arguments." },
+              "cwd": { "type": "string", "default": "${workspaceFolder}", "description": "Working directory (default: the program's directory)." },
+              "env": { "type": "object", "additionalProperties": { "type": ["string", "null"] }, "default": {}, "description": "Extra environment variables (null removes one)." },
+              "stopAtEntry": { "type": "boolean", "default": false, "description": "Stop on the first statement of Main." },
+              "console": {
+                "type": "string",
+                "enum": ["internalConsole", "integratedTerminal", "externalTerminal"],
+                "default": "internalConsole",
+                "description": "Where the program runs: the debug console (no stdin) or a terminal (stdin works)."
+              },
+              "justMyCode": { "type": "boolean", "default": true, "description": "Only stop and step in code with symbols that is not optimized." },
+              "enableStepFiltering": { "type": "boolean", "default": true, "description": "Step through compiler-hidden code." },
+              "evaluateProperties": { "type": "boolean", "default": true, "description": "Run property getters when expanding objects." },
+              "lazyProperties": { "type": "boolean", "default": false, "description": "Show properties as click-to-evaluate nodes instead of running every getter." },
+              "symbolServer": { "type": "boolean", "default": false, "description": "Download missing PDBs from the Microsoft and NuGet symbol servers." },
+              "sourceLink": { "type": "boolean", "default": true, "description": "Download sources via Source Link when they are not on disk." },
+              "sourceFileMap": { "type": "object", "additionalProperties": { "type": "string" }, "default": {}, "description": "Build-time path prefix → local path prefix." },
+              "dotnetPath": { "type": "string", "description": "The dotnet host for .dll programs." },
+              "logFile": { "type": "string", "description": "Write a Digger diagnostic log to this file." },
+              "server": { "type": "string", "description": "host:port of a running 'digger dap --server' to connect to instead of starting digger (remote and container debugging)." }
+            }
+          },
+          "attach": {
+            "required": ["processId"],
+            "properties": {
+              "processId": { "type": ["integer", "string"], "default": "${command:pickProcess}", "description": "Process id of a running .NET process." },
+              "justMyCode": { "type": "boolean", "default": true },
+              "evaluateProperties": { "type": "boolean", "default": true },
+              "lazyProperties": { "type": "boolean", "default": false },
+              "symbolServer": { "type": "boolean", "default": false },
+              "sourceLink": { "type": "boolean", "default": true },
+              "sourceFileMap": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+              "logFile": { "type": "string", "description": "Write a Digger diagnostic log to this file." },
+              "server": { "type": "string", "description": "host:port of a running 'digger dap --server' to connect to." }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "name": "Digger: Launch",
+            "type": "digger",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/bin/Debug/net10.0/${workspaceFolderBasename}.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}"
+          },
+          {
+            "name": "Digger: Attach",
+            "type": "digger",
+            "request": "attach",
+            "processId": "${command:pickProcess}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Digger: Launch",
+            "description": "Debug a built .NET program",
+            "body": {
+              "name": "Digger: Launch",
+              "type": "digger",
+              "request": "launch",
+              "preLaunchTask": "build",
+              "program": "^\"\\${workspaceFolder}/bin/Debug/net10.0/${1:MyApp}.dll\"",
+              "args": [],
+              "cwd": "^\"\\${workspaceFolder}\""
+            }
+          },
+          {
+            "label": "Digger: Launch in terminal",
+            "description": "Run in the integrated terminal so the program can read stdin",
+            "body": {
+              "name": "Digger: Launch in terminal",
+              "type": "digger",
+              "request": "launch",
+              "preLaunchTask": "build",
+              "program": "^\"\\${workspaceFolder}/bin/Debug/net10.0/${1:MyApp}.dll\"",
+              "console": "integratedTerminal"
+            }
+          },
+          {
+            "label": "Digger: Attach",
+            "description": "Attach to a running .NET process",
+            "body": { "name": "Digger: Attach", "type": "digger", "request": "attach", "processId": "^\"\\${command:pickProcess}\"" }
+          },
+          {
+            "label": "Digger: Remote (digger dap --server)",
+            "description": "Connect to digger running in a container or on another machine",
+            "body": {
+              "name": "Digger: Remote",
+              "type": "digger",
+              "request": "launch",
+              "server": "${1:localhost:4711}",
+              "program": "${2:/app/MyApp.dll}",
+              "sourceFileMap": { "${3:/src}": "^\"\\${workspaceFolder}\"" }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

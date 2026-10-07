@@ -215,6 +215,17 @@ public sealed partial class DebugSession
         return [new ScopeView("Locals", _variables.Add(new FrameLocalsContainer(this, frame)))];
     }
 
+    /// <summary>
+    /// Parameter names of the frame's method, in order (for trace output). Async and iterator
+    /// methods report none: their arguments live on in the state machine as locals.
+    /// </summary>
+    public string[] GetParameterNames(int frameId)
+    {
+        RequireStopped();
+        var frame = _frames.Get(frameId) ?? throw new InvalidOperationException($"Unknown frame {frameId}.");
+        return frame.StateMachine is null && frame.Module?.Metadata is { } metadata ? metadata.GetParameterNames(frame.MethodToken) : [];
+    }
+
     public List<VariableView> GetVariables(int reference, int start, int count, bool hex)
     {
         RequireStopped();

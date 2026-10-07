@@ -8,3 +8,4 @@ artifacts/
 editors/zed/target/
 editors/zed/extension.wasm
 __pycache__/
+editors/vscode/*.vsix

@@ -123,4 +123,20 @@ public sealed class ExpressionParserTests
     [InlineData("\"unterminated")]
     public void SyntaxErrors_AreReported(string text) =>
         Assert.Throws<ExpressionException>(() => ExpressionParser.Parse(text));
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("System.InvalidOperationException", true)]
+    [InlineData("InvalidOperationException", true)]
+    [InlineData("OperationException", false)]
+    [InlineData("Exception", true)] // a base type matches derived exceptions
+    [InlineData("System.*", true)]
+    [InlineData("System.IO.*", false)]
+    [InlineData("ArgumentException, InvalidOperationException", true)]
+    [InlineData("ArgumentException IOException", false)]
+    [InlineData("!InvalidOperationException", false)]
+    [InlineData("!ArgumentException", true)]
+    [InlineData("Exception !System.SystemException", false)]
+    public void ExceptionFilter_MatchesTypeChain(string patterns, bool expected) =>
+        Assert.Equal(expected, ExceptionFilter.Parse(patterns).Matches(["System.InvalidOperationException", "System.SystemException", "System.Exception"]));
 }
