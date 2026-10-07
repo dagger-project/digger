@@ -88,10 +88,14 @@ public sealed partial class ValueInspector(ModuleRegistry modules, FuncEvaluator
         return value.Handle;
     }
 
-    internal TypeHandle? Resolve(ICorDebugType type)
+    internal TypeHandle? Resolve(ICorDebugType type) => Resolve(type, includeBuiltIn: false);
+
+    /// <summary>With <paramref name="includeBuiltIn"/>, also string and object (whose methods can be called).</summary>
+    internal TypeHandle? Resolve(ICorDebugType type, bool includeBuiltIn)
     {
         if (type.GetType(out var elementType) < 0
-            || elementType is not (CorElementType.Class or CorElementType.ValueType)
+            || !(elementType is CorElementType.Class or CorElementType.ValueType
+                || (includeBuiltIn && elementType is CorElementType.String or CorElementType.Object))
             || type.GetClass(out var cls) < 0
             || cls.GetModule(out var corModule) < 0
             || cls.GetToken(out var token) < 0
@@ -104,12 +108,15 @@ public sealed partial class ValueInspector(ModuleRegistry modules, FuncEvaluator
     }
 
     /// <summary>The type and its base types, most derived first, stopping before System.Object/ValueType/Enum.</summary>
-    internal List<TypeHandle> GetTypeChain(ICorDebugType? type)
+    internal List<TypeHandle> GetTypeChain(ICorDebugType? type) => GetTypeChain(type, includeBuiltIn: false);
+
+    /// <summary>With <paramref name="includeBuiltIn"/>, a string's chain is System.String (for calling its methods).</summary>
+    internal List<TypeHandle> GetTypeChain(ICorDebugType? type, bool includeBuiltIn)
     {
         var chain = new List<TypeHandle>();
         for (var current = type; current is not null && chain.Count < 32;)
         {
-            if (Resolve(current) is not { } handle
+            if (Resolve(current, includeBuiltIn) is not { } handle
                 || handle.Name is "System.Object" or "System.ValueType" or "System.Enum")
             {
                 break;
@@ -598,7 +605,7 @@ public sealed partial class ValueInspector(ModuleRegistry modules, FuncEvaluator
     /// <summary>Invokes a parameterless property getter by name (instance properties only).</summary>
     public EvalResult? InvokeProperty(ICorDebugThread thread, ValueInfo value, string name)
     {
-        foreach (var level in GetTypeChain(value.Type))
+        foreach (var level in GetTypeChain(value.Type, includeBuiltIn: true))
         {
             foreach (var property in level.Module.Metadata!.GetProperties(level.Token))
             {
@@ -615,10 +622,10 @@ public sealed partial class ValueInspector(ModuleRegistry modules, FuncEvaluator
     /// <summary>Invokes an instance method by name and arity.</summary>
     public EvalResult? InvokeMethod(ICorDebugThread thread, ValueInfo value, string name, IReadOnlyList<ICorDebugValue> args)
     {
-        foreach (var level in GetTypeChain(value.Type))
+        foreach (var level in GetTypeChain(value.Type, includeBuiltIn: true))
         {
-            var token = level.Module.Metadata!.FindMethod(level.Token, name, args.Count);
-            if (token != 0 && !level.Module.Metadata.IsStatic(token))
+            var token = PickOverload(level.Module.Metadata!, level.Token, name, args, isStatic: false);
+            if (token != 0)
             {
                 return CallMethod(thread, value, level, token, args);
             }

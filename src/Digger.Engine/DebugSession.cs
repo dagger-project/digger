@@ -478,6 +478,8 @@ public sealed partial class DebugSession : ICallbackSink, IDisposable
 
     private ICorDebugThread GetThread(int threadId)
     {
+        // Task frames (see GetAsyncTasks) use negative ids; their code runs on the stopped thread.
+        threadId = threadId < 0 ? _lastStoppedThreadId : threadId;
         if (_process is null || _process.GetThread((uint)threadId, out var thread) < 0)
         {
             throw new InvalidOperationException($"Thread {threadId} does not exist.");

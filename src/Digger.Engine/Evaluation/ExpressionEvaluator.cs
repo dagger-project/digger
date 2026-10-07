@@ -15,6 +15,21 @@ public interface IEvaluationScope
 
     /// <summary>A local, argument, hoisted/captured variable, or <c>this</c>; null when unknown.</summary>
     ICorDebugValue? Lookup(string name);
+
+    /// <summary>The type whose code is running (the user's type, for lambdas and async methods), for static names.</summary>
+    StaticType? DeclaringType => null;
+}
+
+/// <summary>The "value" of a call to a method that returns <c>void</c>.</summary>
+public sealed class VoidResult
+{
+    public static VoidResult Instance { get; } = new();
+
+    private VoidResult()
+    {
+    }
+
+    public override string ToString() => "void";
 }
 
 /// <summary>Result of evaluating an expression: a debuggee value, a local constant, or an error.</summary>
@@ -36,6 +51,11 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
         try
         {
             var result = Eval(ExpressionParser.Parse(text), scope);
+            if (result.Type is { } type)
+            {
+                return EvaluationOutcome.Fail($"'{type.Name}' is a type, not a value.");
+            }
+
             return result.Debuggee is not null
                 ? new EvaluationOutcome(result.Debuggee, null, null)
                 : new EvaluationOutcome(null, result.Constant, null);
@@ -67,9 +87,11 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
 
     // ---- Operands ---------------------------------------------------------------------
 
-    /// <summary>Either a debuggee value or a local constant (null, bool, char, numbers, string).</summary>
-    private readonly record struct Operand(ValueInfo? Debuggee, object? Constant)
+    /// <summary>A debuggee value, a local constant (null, bool, char, numbers, string), or a type (for its statics).</summary>
+    private readonly record struct Operand(ValueInfo? Debuggee, object? Constant, StaticType? Type = null)
     {
+        public static Operand Of(StaticType type) => new(null, null, type);
+
         public static Operand Of(object? constant) => new(null, constant);
 
         public static Operand Of(ICorDebugValue value) => new(ValueInspector.Analyze(value), null);
@@ -79,7 +101,9 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
     {
         LiteralExpr literal => Operand.Of(literal.Value),
         NameExpr name => EvalName(name.Name, scope),
-        MemberExpr member => EvalMember(Eval(member.Target, scope), member.Name, scope),
+        MemberExpr member => ResolveQualifiedType(member, scope) is { } type
+            ? Operand.Of(type)
+            : EvalMember(Eval(member.Target, scope), member.Name, scope),
         IndexExpr index => EvalIndex(index, scope),
         CallExpr call => EvalCall(call, scope),
         UnaryExpr unary => EvalUnary(unary.Operator, Eval(unary.Operand, scope)),
@@ -107,11 +131,85 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
             }
         }
 
+        // Static member of the running code's type (or of a type it is nested in), then a type name.
+        for (var type = scope.DeclaringType; type is not null; type = Enclosing(type))
+        {
+            if (TryStaticMember(type, name, scope, out var member))
+            {
+                return member;
+            }
+        }
+
+        if (inspector.ResolveTypeName(name, scope.DeclaringType) is { } named)
+        {
+            return Operand.Of(named);
+        }
+
         throw new ExpressionException($"The name '{name}' does not exist in the current context.");
+    }
+
+    private StaticType? Enclosing(StaticType type) =>
+        type.Module.Metadata!.GetEnclosingType(type.Token) is not 0 and var outer
+            ? inspector.FindType(type.Module.Metadata.GetMetadataName(outer))
+            : null;
+
+    /// <summary>
+    /// <c>System.IO.Path</c> or <c>MyApp.Program</c>: a dotted name whose first part is not a
+    /// variable may be a namespace-qualified type.
+    /// </summary>
+    private StaticType? ResolveQualifiedType(MemberExpr member, IEvaluationScope scope)
+    {
+        var parts = new List<string> { member.Name };
+        Expr current = member.Target;
+        while (current is MemberExpr inner)
+        {
+            parts.Add(inner.Name);
+            current = inner.Target;
+        }
+
+        if (current is not NameExpr root || root.Name == "this" || scope.Lookup(root.Name) is not null)
+        {
+            return null;
+        }
+
+        parts.Add(root.Name);
+        parts.Reverse();
+        return inspector.FindType(string.Join('.', parts));
+    }
+
+    private bool TryStaticMember(StaticType type, string name, IEvaluationScope scope, out Operand result)
+    {
+        if (ValueInspector.GetStaticField(type, name, scope.Thread) is { } field)
+        {
+            result = Operand.Of(field);
+            return true;
+        }
+
+        if (inspector.InvokeStaticProperty(scope.Thread, type, name) is { } property)
+        {
+            result = FromEval(property, name);
+            return true;
+        }
+
+        if (ValueInspector.FindNestedType(type, name) is { } nested)
+        {
+            result = Operand.Of(nested);
+            return true;
+        }
+
+        result = default;
+        return false;
     }
 
     private Operand EvalMember(Operand target, string name, IEvaluationScope scope)
     {
+        if (target.Type is { } type)
+        {
+            return TryStaticMember(type, name, scope, out var member)
+                ? member
+                : throw new ExpressionException($"'{type.Name}' does not contain a static member named '{name}'.");
+        }
+
         if (target.Debuggee is null)
         {
             return target.Constant switch
@@ -223,7 +321,33 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
             args.Add(ToDebuggee(Eval(argument, scope), scope));
         }
 
+        // A bare call: an instance method of 'this', else a static method of the running code's type.
+        if (call.Target is NameExpr { Name: "this" })
+        {
+            if (scope.Lookup("this") is { } self && inspector.InvokeMethod(scope.Thread, ValueInspector.Analyze(self), call.Method, args) is { } own)
+            {
+                return FromEval(own, call.Method);
+            }
+
+            for (var type = scope.DeclaringType; type is not null; type = Enclosing(type))
+            {
+                if (inspector.InvokeStaticMethod(scope.Thread, type, call.Method, args) is { } called)
+                {
+                    return FromEval(called, call.Method);
+                }
+            }
+
+            throw new ExpressionException($"The name '{call.Method}' does not exist in the current context (or takes a different number of arguments).");
+        }
+
         var target = Eval(call.Target, scope);
+        if (target.Type is { } staticType)
+        {
+            var staticCall = inspector.InvokeStaticMethod(scope.Thread, staticType, call.Method, args)
+                ?? throw new ExpressionException($"'{staticType.Name}' has no static method '{call.Method}' taking {args.Count} argument(s).");
+            return FromEval(staticCall, call.Method);
+        }
+
         if (target.Debuggee is not { IsNull: false } info)
         {
             if (target.Constant is { } constant && call.Method == "ToString" && call.Arguments.Count == 0)
@@ -252,7 +376,9 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
             throw new ExpressionException($"'{what}' threw {type}.");
         }
 
-        return result.Value is null ? Operand.Of((object?)null) : Operand.Of(result.Value);
+        // A finished evaluation with no value at all called a void method (a null reference
+        // still comes back as a value).
+        return result.Value is null ? Operand.Of(VoidResult.Instance) : Operand.Of(result.Value);
     }
 
     /// <summary>Materializes a constant in the debuggee so it can be passed as an argument.</summary>
@@ -293,6 +419,16 @@ public sealed class ExpressionEvaluator(ValueInspector inspector)
     /// <summary>Reads a debuggee value into a local constant (primitives, strings, enums, null).</summary>
     private object? ToConstant(Operand operand)
     {
+        if (operand.Type is { } type)
+        {
+            throw new ExpressionException($"'{type.Name}' is a type, not a value.");
+        }
+
+        if (operand.Constant is VoidResult)
+        {
+            throw new ExpressionException("The method returns no value.");
+        }
+
         if (operand.Debuggee is not { } info)
         {
             return operand.Constant;

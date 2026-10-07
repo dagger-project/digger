@@ -57,6 +57,7 @@ internal sealed partial class Repl : IDisposable
     private int _processId;
     private int _exitCode;
     private bool _quit;
+    private volatile bool _calling;
     private ModuleMetadata? _program;
     private PosixSignalRegistration? _interrupt;
 
@@ -346,7 +347,12 @@ internal sealed partial class Repl : IDisposable
     private void OnInterrupt(PosixSignalContext context)
     {
         context.Cancel = true;
-        if (_state == State.Running && _session is { } session)
+        if (_calling && _session is { } calling)
+        {
+            Console.WriteLine();
+            calling.AbortEvaluation(); // thread-safe: the engine thread is busy waiting for the call
+        }
+        else if (_state == State.Running && _session is { } session)
         {
             Console.WriteLine();
             _dispatcher.Post(session.Pause);

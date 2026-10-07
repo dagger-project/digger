@@ -201,6 +201,53 @@ public sealed class ModuleMetadata : IDisposable
         return blob.ReadCompressedInteger();
     }
 
+    /// <summary>
+    /// The ECMA-335 element type of each parameter (<c>0x08</c> int, <c>0x0E</c> string,
+    /// <c>0x12</c> class, <c>0x1C</c> object, ...), for choosing between overloads.
+    /// </summary>
+    public byte[] GetParameterElementTypes(uint methodToken)
+    {
+        var signature = GetMethod(methodToken).DecodeSignature(ElementTypeProvider.Instance, genericContext: null);
+        return [.. signature.ParameterTypes];
+    }
+
+    /// <summary>Reduces a signature type to its element type code.</summary>
+    private sealed class ElementTypeProvider : ISignatureTypeProvider<byte, object?>
+    {
+        public static ElementTypeProvider Instance { get; } = new();
+
+        private const byte ValueType = 0x11;
+        private const byte Class = 0x12;
+
+        public byte GetPrimitiveType(PrimitiveTypeCode typeCode) => (byte)typeCode;
+
+        public byte GetTypeFromDefinition(MetadataReader reader, TypeDefinitionHandle handle, byte rawTypeKind) => rawTypeKind == ValueType ? ValueType : Class;
+
+        public byte GetTypeFromReference(MetadataReader reader, TypeReferenceHandle handle, byte rawTypeKind) => rawTypeKind == ValueType ? ValueType : Class;
+
+        public byte GetTypeFromSpecification(MetadataReader reader, object? genericContext, TypeSpecificationHandle handle, byte rawTypeKind) => 0x15;
+
+        public byte GetSZArrayType(byte elementType) => 0x1D;
+
+        public byte GetArrayType(byte elementType, ArrayShape shape) => 0x14;
+
+        public byte GetByReferenceType(byte elementType) => 0x10;
+
+        public byte GetPointerType(byte elementType) => 0x0F;
+
+        public byte GetGenericInstantiation(byte genericType, System.Collections.Immutable.ImmutableArray<byte> typeArguments) => 0x15;
+
+        public byte GetGenericTypeParameter(object? genericContext, int index) => 0x13;
+
+        public byte GetGenericMethodParameter(object? genericContext, int index) => 0x1E;
+
+        public byte GetFunctionPointerType(MethodSignature<byte> signature) => 0x1B;
+
+        public byte GetModifiedType(byte modifier, byte unmodifiedType, bool isRequired) => unmodifiedType;
+
+        public byte GetPinnedType(byte elementType) => elementType;
+    }
+
     /// <summary>Parameter names indexed by position (0 = first declared parameter).</summary>
     public string[] GetParameterNames(uint methodToken)
     {
@@ -525,6 +572,38 @@ public sealed class ModuleMetadata : IDisposable
 
             yield return (uint)MetadataTokens.GetToken(handle);
         }
+    }
+
+    /// <summary>The type a nested type is declared in, or 0.</summary>
+    public uint GetEnclosingType(uint typeDefToken)
+    {
+        var definition = Reader.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(RowOf(typeDefToken)));
+        return definition.IsNested ? (uint)MetadataTokens.GetToken(definition.GetDeclaringType()) : 0;
+    }
+
+    /// <summary>Namespace of a type (of the outermost type, for nested ones).</summary>
+    public string GetNamespace(uint typeDefToken)
+    {
+        while (GetEnclosingType(typeDefToken) is not 0 and var outer)
+        {
+            typeDefToken = outer;
+        }
+
+        return Reader.GetString(Reader.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(RowOf(typeDefToken))).Namespace);
+    }
+
+    /// <summary>The name <see cref="FindType"/> takes: <c>Namespace.Outer+Inner</c>.</summary>
+    public string GetMetadataName(uint typeDefToken)
+    {
+        var definition = Reader.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(RowOf(typeDefToken)));
+        var name = Reader.GetString(definition.Name);
+        if (definition.IsNested)
+        {
+            return GetMetadataName((uint)MetadataTokens.GetToken(definition.GetDeclaringType())) + "+" + name;
+        }
+
+        var ns = Reader.GetString(definition.Namespace);
+        return ns.Length == 0 ? name : ns + "." + name;
     }
 
     /// <summary>Whether the type has generic parameters (its statics exist per instantiation).</summary>

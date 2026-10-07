@@ -403,7 +403,7 @@ public sealed partial class DebugSession
                 {
                     { Error: { } error } => "<" + error + ">",
                     { Value: { } value } => value.Target is ICorDebugStringValue s ? s.GetStringValue() : _inspector.Format(value),
-                    _ => outcome.Constant is string text ? text : ValueInspector.FormatPrimitive(outcome.Constant, hex: false),
+                    _ => outcome.Constant is string or Evaluation.VoidResult ? outcome.Constant.ToString() : ValueInspector.FormatPrimitive(outcome.Constant, hex: false),
                 });
             }
 

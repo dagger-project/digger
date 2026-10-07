@@ -25,6 +25,7 @@ public readonly record struct EvalResult(ICorDebugValue? Value, bool IsException
 public sealed class FuncEvaluator : IDisposable
 {
     private readonly ManualResetEventSlim _completed = new();
+    private readonly ManualResetEventSlim _abortRequested = new();
     private volatile bool _isRunning;
     private volatile bool _completedWithException;
     private volatile bool _abandoned;
@@ -33,6 +34,9 @@ public sealed class FuncEvaluator : IDisposable
 
     /// <summary>Time allowed for one evaluation before it is aborted.</summary>
     public TimeSpan Timeout { get; set; }
+
+    /// <summary>Let every thread run during evaluations (Delve's <c>call</c>), not only the evaluating one.</summary>
+    public bool RunAllThreads { get; set; }
 
     /// <summary>Set by the session while the process is alive and stopped at a safe point.</summary>
     public ICorDebugProcess? Process { get; set; }
@@ -51,6 +55,15 @@ public sealed class FuncEvaluator : IDisposable
     {
         _completedWithException = exception;
         _completed.Set();
+    }
+
+    /// <summary>Any thread: aborts the running evaluation (Ctrl-C during <c>call</c>).</summary>
+    public void RequestAbort()
+    {
+        if (_isRunning)
+        {
+            _abortRequested.Set();
+        }
     }
 
     /// <summary>The process exited mid-evaluation: wake the waiter.</summary>
@@ -114,25 +127,32 @@ public sealed class FuncEvaluator : IDisposable
     {
         var process = Process!;
         _completed.Reset();
+        _abortRequested.Reset();
         _abandoned = false;
         _completedWithException = false;
         _isRunning = true;
         Generation++;
         try
         {
-            // Only the evaluating thread runs; others stay frozen so the user's view of the
-            // program does not change underneath them.
-            _ = process.SetAllThreadsDebugState(CorDebugThreadState.Suspend, thread);
-            _ = thread.SetDebugState(CorDebugThreadState.Run);
+            // Normally only the evaluating thread runs; others stay frozen so the user's view
+            // of the program does not change underneath them.
+            if (!RunAllThreads)
+            {
+                _ = process.SetAllThreadsDebugState(CorDebugThreadState.Suspend, thread);
+                _ = thread.SetDebugState(CorDebugThreadState.Run);
+            }
+
             var hr = process.Continue(false);
             if (hr < 0)
             {
                 return EvalResult.Failure(Describe(hr));
             }
 
-            if (!_completed.Wait(Timeout))
+            var signaled = WaitHandle.WaitAny([_completed.WaitHandle, _abortRequested.WaitHandle], Timeout);
+            if (signaled != 0)
             {
-                Log.Warn("Evaluation timed out; aborting");
+                var reason = signaled == 1 ? "aborted" : "timed out";
+                Log.Warn($"Evaluation {reason}; aborting");
                 _ = eval.Abort();
                 if (!_completed.Wait(TimeSpan.FromSeconds(2)))
                 {
@@ -144,11 +164,11 @@ public sealed class FuncEvaluator : IDisposable
                     if (!_completed.Wait(TimeSpan.FromSeconds(2)))
                     {
                         _abandoned = true;
-                        return EvalResult.Failure("Evaluation timed out and could not be aborted.");
+                        return EvalResult.Failure($"Evaluation {reason} and could not be stopped.");
                     }
                 }
 
-                return EvalResult.Failure("Evaluation timed out.");
+                return EvalResult.Failure($"Evaluation {reason}.");
             }
 
             if (_abandoned)
@@ -177,5 +197,9 @@ public sealed class FuncEvaluator : IDisposable
         _ => $"Evaluation failed (0x{hr:X8}).",
     };
 
-    public void Dispose() => _completed.Dispose();
+    public void Dispose()
+    {
+        _completed.Dispose();
+        _abortRequested.Dispose();
+    }
 }

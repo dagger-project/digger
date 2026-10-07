@@ -127,6 +127,18 @@ out = run(["exec", PROGRAM], ["config -list", "exit"])
 expect("config is loaded at startup", out, "source-list-line-count   1", "alias                    pp → print")
 os.remove(os.path.join(CONFIG_HOME, "digger", "config"))
 
+out = run(["exec", PROGRAM], [f"b {conditional}", "c", "call numbers.Add(13)", "p numbers.Count", "call Add(2, 3)", "p Program.Add(4, 5)",
+                              "p s_counter", "p Math.Max(2.5, 1.0)", "p text.Contains(\"line\")", "p numbers.Clear()", "p Program", "exit"])
+expect("call runs methods", out, "(digger) call numbers.Add(13)\n(digger) p numbers.Count\n6", "(digger) call Add(2, 3)\n5")
+expect("statics and type names", out, "(digger) p Program.Add(4, 5)\n9", "(digger) p s_counter\n42", "(digger) p Math.Max(2.5, 1.0)\n2.5",
+       "(digger) p text.Contains(\"line\")\ntrue", "(digger) p numbers.Clear()\nvoid", "is a type, not a value")
+
+out = run(["exec", PROGRAM], [f"b {in_async}", "c", "tasks", "task 2", "stack", "p number + 1", "next", "exit"])
+expect("tasks lists async methods", out,
+       f"Task 1 - HelloDebug.Program.ComputeAsync() ./samples/HelloDebug/Program.cs:{in_async} [running on thread",
+       f"Task 2 - HelloDebug.Program.Main() ./samples/HelloDebug/Program.cs:{line_of('await ComputeAsync(person, 3)')} [awaiting]")
+expect("task switches to a logical stack", out, "Switched to task 2", "(digger) p number + 1\n8", "cannot be stepped")
+
 out = run(["exec", PROGRAM], ["catch InvalidOperationException", "continue", "print $exception.Message", "exit"])
 expect("catch thrown exception by type", out, "Stop on thrown exceptions: InvalidOperationException", "[exception]",
        "HelloDebug.Program.Fail(", "Something went wrong for")

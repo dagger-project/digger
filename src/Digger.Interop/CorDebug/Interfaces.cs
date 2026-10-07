@@ -67,6 +67,28 @@ public partial interface ICorDebugProcess : ICorDebugController
     [PreserveSig] int GetHelperThreadID(out uint pThreadID);
 }
 
+/// <summary>Heap inspection (implemented by the same object as <see cref="ICorDebugProcess"/>).</summary>
+[GeneratedComInterface]
+[Guid("21e9d9c0-fcb8-11df-8cff-0800200c9a66")]
+public partial interface ICorDebugProcess5
+{
+    [PreserveSig] int GetGCHeapInformation(nint pHeapInfo);
+    [PreserveSig] int EnumerateHeap(out ICorDebugHeapEnum ppObjects);
+    [PreserveSig] int EnumerateHeapRegions(out nint ppRegions);
+    [PreserveSig] int GetObject(ulong addr, out ICorDebugObjectValue pObject);
+    [PreserveSig] int EnumerateGCReferences([MarshalAs(UnmanagedType.Bool)] bool enumerateWeakReferences, out nint ppEnum);
+    [PreserveSig] int EnumerateHandles(uint types, out nint ppEnum);
+    [PreserveSig] int GetTypeID(ulong obj, out CorTypeId pId);
+    [PreserveSig] int GetTypeForTypeID(CorTypeId id, out ICorDebugType ppType);
+}
+
+[GeneratedComInterface]
+[Guid("76D7DAB8-D044-11DF-9A15-7E29DFD72085")]
+public partial interface ICorDebugHeapEnum : ICorDebugEnum
+{
+    [PreserveSig] unsafe int Next(uint celt, CorHeapObject* objects, out uint pceltFetched);
+}
+
 [GeneratedComInterface]
 [Guid("3d6f5f63-7538-11d3-8d5b-00104b35e7ef")]
 public partial interface ICorDebugAppDomain : ICorDebugController

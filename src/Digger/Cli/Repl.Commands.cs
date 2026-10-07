@@ -57,6 +57,15 @@ internal sealed partial class Repl
         new(["next", "n"], RunningGroup, "next [<count>]", "Step over to next source line.", args => StepCommand(StepKind.Over, args)) { Repeats = true },
         new(["step", "s"], RunningGroup, "step", "Single step through program.", args => StepCommand(StepKind.In, args)) { Repeats = true },
         new(["stepout", "so"], RunningGroup, "stepout", "Step out of the current function.", args => StepCommand(StepKind.Out, args)) { Repeats = true },
+        new(["call"], RunningGroup, "call <expression>", "Run a method call, letting the whole program run while it executes.", Call)
+        {
+            Arguments = Completes.Expression,
+            Details = """
+                Like print, but other threads run during the call and there is no time limit, so
+                the method may wait on them (locks, tasks). Ctrl-C aborts it. E.g. 'call list.Clear()'.
+                Breakpoints hit by other threads during the call are ignored.
+                """,
+        },
         new(["restart", "r"], RunningGroup, "restart", "Restart the process (breakpoints are kept).", Restart),
         new(["rebuild"], RunningGroup, "rebuild", "Rebuild the project and restart the process (digger debug and test only).", Rebuild),
         new(["exit", "quit", "q"], RunningGroup, "exit", "Exit the debugger (kills a launched program).", _ => Quit(force: false)),
@@ -131,6 +140,16 @@ internal sealed partial class Repl
 
         new(["threads"], ThreadGroup, "threads", "Print out info for every thread.", _ => Threads()),
         new(["thread", "tr"], ThreadGroup, "thread <id>", "Switch to the specified thread.", SwitchThread),
+        new(["tasks", "goroutines", "grs"], ThreadGroup, "tasks [-a]", "List async methods in flight (-a includes framework code).", Tasks)
+        {
+            Details = """
+                Lists the async methods that have started and not finished: where each one waits
+                (or 'running' if it is executing on a thread) and which method awaits it. The
+                program's memory is searched, so this can take a moment in a large process.
+                Numbers are valid until the program runs again. 'task <id>' switches to one.
+                """,
+        },
+        new(["task", "goroutine", "gr"], ThreadGroup, "task <id>", "Switch to an async method's logical call stack.", SwitchTask),
 
         new(["stack", "bt"], StackGroup, "stack [<depth>] [-full]", "Print stack trace (-full includes locals).", Stack),
         new(["frame"], StackGroup, "frame <n> [<command>]", "Set the current frame, or run a command in another frame.", Frame),
@@ -256,6 +275,11 @@ internal sealed partial class Repl
             Start(stopAtEntry: true);
             ReportStop();
             return;
+        }
+
+        if (_threadId < 0)
+        {
+            throw new CommandException("A task waiting at an await cannot be stepped; switch to a thread with 'thread <id>' first.");
         }
 
         var count = kind == StepKind.Over ? ParseCount(arguments) : 1;
@@ -787,6 +811,36 @@ internal sealed partial class Repl
         PrintChildren(session, view, "  ", hex);
     }
 
+    private void Call(string arguments)
+    {
+        if (arguments.Length == 0)
+        {
+            throw new CommandException("call needs an expression, e.g. 'call list.Clear()'.");
+        }
+
+        var session = RequireStopped();
+        var frameId = CurrentFrameId();
+        _calling = true;
+        VariableView view;
+        try
+        {
+            view = Engine(() => session.Call(arguments, frameId, hex: false));
+        }
+        finally
+        {
+            _calling = false;
+            _frames = null; // the program ran: frames must be read again
+        }
+
+        if (view.Type == "void")
+        {
+            return; // like Delve: a call without a result prints nothing
+        }
+
+        Console.WriteLine(FormatValue(view));
+        PrintChildren(session, view, "  ", hex: false);
+    }
+
     private void WhatIs(string arguments)
     {
         var session = RequireStopped();
@@ -986,6 +1040,46 @@ internal sealed partial class Repl
             var marker = thread.Id == _threadId ? "*" : " ";
             Console.WriteLine($"{marker} Thread {thread.Id} {Ansi.Cyan(thread.Name)} at {where}");
         }
+    }
+
+    private void Tasks(string arguments)
+    {
+        var all = arguments.Trim() == "-a";
+        var session = RequireStopped();
+        var tasks = Engine(() => session.GetAsyncTasks(userCodeOnly: !all));
+        foreach (var task in tasks)
+        {
+            var marker = -task.Id == _threadId ? "*" : " ";
+            var name = task.IsUserCode ? Ansi.Bold(FunctionName(task.Name)) : FunctionName(task.Name);
+            var where = task.SourcePath is { } path ? $" {DisplayPath(path)}:{task.Line}" : "";
+            var state = !task.IsRunning ? Ansi.Dim(" [awaiting]")
+                : task.ThreadId != 0 ? Ansi.Green($" [running on thread {task.ThreadId}]")
+                : Ansi.Green(" [running]");
+            var awaitedBy = task.AwaitedBy is { } caller ? Ansi.Dim($" ← {FunctionName(caller)}") : "";
+            Console.WriteLine($"{marker} Task {task.Id} - {name}{where}{state}{awaitedBy}");
+        }
+
+        Console.WriteLine($"[{tasks.Count} task{(tasks.Count == 1 ? "" : "s")}{(all ? "" : "; 'tasks -a' includes framework code")}]");
+    }
+
+    private void SwitchTask(string arguments)
+    {
+        var session = RequireStopped();
+        if (!int.TryParse(arguments.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0)
+        {
+            throw new CommandException("usage: task <id> ('tasks' lists them)");
+        }
+
+        if (!Engine(() => session.GetAsyncTasks(userCodeOnly: false)).Exists(t => t.Id == id))
+        {
+            throw new CommandException($"There is no task {id}.");
+        }
+
+        _threadId = -id; // the engine serves a task's logical stack as thread -id
+        _frameIndex = 0;
+        _frames = null;
+        Console.WriteLine($"Switched to task {id}");
+        ReportFrame();
     }
 
     private void SwitchThread(string arguments)

@@ -24,13 +24,13 @@ netcoredbg), using source-generated COM bindings, and reads portable PDBs with
 | Breakpoints | line, conditional (`i == 5 && name != null`), hit count (`5`, `>= 5`, `% 2`), logpoints (`x = {x}`), function (`Program.Main`), pending breakpoints that bind as modules load; in the terminal also tracepoints (`trace`) and commands run on a hit (`on`) |
 | Exceptions | break on unhandled (default) and on thrown (`all`, honours Just My Code), optionally only for some types (`IOException, System.Net.*, !OperationCanceledException`, derived types included); exception info with message, inner exceptions and stack trace |
 | Stepping | over / into / out, Just My Code, compiler-hidden code skipped, **step over `await`** (resumes in the same async invocation), **step out of async methods** to the awaiting caller |
-| Stack | threads with names, async methods shown by their real name (not `MoveNext`), lambdas and local functions untangled, non-user frames de-emphasized, **async call stacks** (logical awaiting callers, with their locals) |
+| Stack | threads with names, async methods shown by their real name (not `MoveNext`), lambdas and local functions untangled, non-user frames de-emphasized, **async call stacks** (logical awaiting callers, with their locals); in the terminal, every async method in flight (`tasks`) with its logical stack |
 | Control | set next statement (`gotoTargets`/`goto`), single-thread continue/step (other threads stay frozen) |
 | Sources | `sourceFileMap`, sources embedded in PDBs, Source Link downloads, Microsoft/NuGet symbol servers (opt-in) |
 | Variables | locals, arguments, `this`, `$exception`; closures and async state machines flattened back into plain locals; fields, auto-properties, property getters (func-eval, with timeout), static members |
 | Formatting | `[DebuggerDisplay]` (with `nq`/`h`/`d` specifiers), primitives (also boxed), strings, enums and `[Flags]`, `Nullable<T>`, `decimal`, `DateTime`, `TimeSpan`, `Guid`, `KeyValuePair`; hex display |
 | Collections | arrays (incl. multi-dimensional, paged); field-based views of `List`, `Dictionary`, `HashSet`, `Queue`, `Stack`, `LinkedList`, `ImmutableArray`; **Results View** for any other `IEnumerable` (`ConcurrentDictionary`, `ImmutableList`, LINQ, iterators, ...); Raw View |
-| Evaluation | watch / hover / REPL: literals, locals, members, indexers (arrays, lists, dictionaries), method calls, arithmetic, comparison, logical, `??`, `?:`; debug console completions |
+| Evaluation | watch / hover / REPL: literals, locals, members, indexers (arrays, lists, dictionaries), method calls (overloads chosen by argument type), static members and type names (`Program.Add(1, 2)`, `s_counter`, `Math.Max(a, b)`, `DateTime.Now`, `string.Concat(x, y)`), arithmetic, comparison, logical, `??`, `?:`; debug console completions |
 | Editing | set primitives, strings and `null` |
 | Output | debuggee stdout/stderr and `Debugger.Log` forwarded as DAP output, or `"console": "integratedTerminal"` to run in the editor's terminal (stdin works); real exit codes |
 
@@ -93,10 +93,10 @@ file names and expressions.
 
 | | |
 | --- | --- |
-| Running | `continue` (`c`) [location], `next` (`n`) [count], `step` (`s`), `stepout` (`so`), `restart` (`r`), `rebuild`, `exit` (`q`), Ctrl-C to pause |
+| Running | `continue` (`c`) [location], `next` (`n`) [count], `step` (`s`), `stepout` (`so`), `call` expr, `restart` (`r`), `rebuild`, `exit` (`q`), Ctrl-C to pause |
 | Breakpoints | `break` (`b`) location [`if` condition], `trace` (`t`) [-stack n] location, `on` id command, `breakpoints` (`bp`), `clear` id, `clearall`, `condition` (`cond`) id expr / `-hitcount` id op n, `toggle` id, `catch` |
 | Data | `print` (`p`) [-x] expr, `locals` [-v], `vars` [regex], `whatis` expr, `set` var = value, `display` -a expr |
-| Threads and stack | `threads`, `thread` (`tr`) id, `stack` (`bt`) [depth] [-full], `frame` n [command], `up`, `down` |
+| Threads and stack | `threads`, `thread` (`tr`) id, `tasks` (`goroutines`) [-a], `task` (`goroutine`) id, `stack` (`bt`) [depth] [-full], `frame` n [command], `up`, `down` |
 | Other | `list` (`l`) [location], `sources` / `funcs` / `types` [-a] [regex], `libraries`, `edit` (`ed`), `config`, `source` file, `transcript` file, `help` (`h`) |
 
 Locations are `Program.cs:12` (any unique path suffix), `12` (current file), `+3`/`-3`, or a
@@ -112,7 +112,17 @@ method: `Main`, `Program.Main`, `MyApp.Program.Main`. History is kept in
 (digger) vars counter                             # static fields of your code
 MyApp.Program.s_counter = 3
 (digger) funcs Program\.                          # methods; types lists types (-a: framework too)
+(digger) call cache.Clear()                       # run code; other threads run too, Ctrl-C aborts
+(digger) tasks                                    # async methods in flight, like Delve's goroutines
+  Task 1 - MyApp.Worker.FetchAsync() ./Worker.cs:42 [running on thread 4711] ← MyApp.Program.Main()
+  Task 2 - MyApp.Program.Main() ./Program.cs:90 [awaiting]
+(digger) task 2                                   # stack, locals and print now work on Main
 ```
+
+`print` runs method calls with a 5 second limit, with other threads frozen. `call` lets the whole
+program run during the call, with no time limit, so the method may wait on other threads; Ctrl-C
+aborts it. `tasks` searches the program's memory for unfinished async methods, which can take a
+moment in a large process; a task's number is valid until the program runs again.
 
 `config` changes settings: `source-list-line-count`, `max-array-values`, `just-my-code`,
 `evaluate-properties`, `symbol-server`, `source-link`, `substitute-path <from> <to>` (like
@@ -382,7 +392,7 @@ Good next steps, roughly in order of value:
 * **Windows**: dbgshim works there, but stdio redirection and exit-code handling are Unix-only.
 * **`DebuggerTypeProxy`** attributes (`DebuggerDisplay` is supported).
 * **Debugging tests from editors** (a Zed debug locator for test projects; `digger test` covers the terminal).
-* **Evaluator**: casts, `typeof`, static members via type names (`DateTime.Now`), lambdas.
+* **Evaluator**: casts, `typeof`, generic methods, lambdas, argument conversions (an `int` passed to a `long` parameter).
 * Decompilation for frames with no source at all.
 * Data breakpoints (CoreCLR implements them on Windows only) and Hot Reload (needs a Roslyn workspace).
 * Edit and Continue / hot reload.

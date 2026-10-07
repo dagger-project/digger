@@ -65,10 +65,14 @@ internal sealed class FrameStore
 
     public FrameEntry? Get(int id) => id > 0 && id <= _byId.Count ? _byId[id - 1] : null;
 
+    /// <summary>Suspended async methods found by a heap walk during this stop, if one ran.</summary>
+    public List<TaskView>? Tasks { get; set; }
+
     public void Clear()
     {
         _byThread.Clear();
         _byId.Clear();
+        Tasks = null;
     }
 }
 
@@ -110,6 +114,13 @@ public sealed partial class DebugSession
         if (_frames.TryGetThread(threadId, out var cached))
         {
             return cached;
+        }
+
+        if (threadId < 0)
+        {
+            // A task's logical stack (see GetAsyncTasks); found by the heap walk.
+            _ = GetAsyncTasks(userCodeOnly: false);
+            return _frames.TryGetThread(threadId, out var task) ? task : throw new InvalidOperationException($"There is no task {-threadId}.");
         }
 
         var frames = WalkStack(GetThread(threadId), threadId);
@@ -365,7 +376,7 @@ public sealed partial class DebugSession
     };
 
     private ICorDebugThread? TryGetThread(int threadId) =>
-        _process is not null && _process.GetThread((uint)threadId, out var thread) >= 0 ? thread : null;
+        _process is not null && _process.GetThread((uint)(threadId < 0 ? _lastStoppedThreadId : threadId), out var thread) >= 0 ? thread : null;
 
     /// <summary>Remembers the thread and frame a container belongs to.</summary>
     private sealed class ContextContainer(IVariableContainer inner, EvalContext context) : IVariableContainer
@@ -541,60 +552,74 @@ public sealed partial class DebugSession
             return result;
         }
 
-        var box = task;
+        var callers = FollowContinuations(task, threadId);
+        if (callers.Count > 0)
+        {
+            result.Add(new FrameEntry { ThreadId = threadId, Depth = -1, Name = "[Async Call Stack]", IsLabel = true });
+            result.AddRange(callers);
+        }
+
+        return result;
+    }
+
+    /// <summary>The async methods awaiting the task <paramref name="box"/>, innermost first.</summary>
+    private List<FrameEntry> FollowContinuations(ValueInfo box, int threadId)
+    {
+        var result = new List<FrameEntry>();
         for (var depth = 0; depth < 64; depth++)
         {
             if (_inspector.FindField(box, "m_continuationObject") is not { } continuation
                 || FindStateMachineBox(ValueInspector.Analyze(continuation), 0) is not { } next
-                || _inspector.FindField(next, "StateMachine") is not { } stateMachineValue)
+                || _inspector.FindField(next, "StateMachine") is not { } stateMachineValue
+                || DescribeAsyncFrame(ValueInspector.Analyze(stateMachineValue), threadId) is not { } frame)
             {
                 break;
             }
 
-            var stateMachine = ValueInspector.Analyze(stateMachineValue);
-            if (_inspector.Resolve(stateMachine) is not { Module.Metadata: { } metadata } type)
-            {
-                break;
-            }
-
-            var moveNext = metadata.FindMethod(type.Token, "MoveNext", 0);
-            if (moveNext == 0)
-            {
-                break;
-            }
-
-            SourceLocation? location = null;
-            if (type.Module.Symbols is { } symbols
-                && _inspector.FindField(stateMachine, "<>1__state") is { } stateValue
-                && ValueInspector.ReadPrimitive(stateValue, CorElementType.I4) is int state)
-            {
-                // Roslyn numbers await states in source order, matching the PDB's await list.
-                var awaits = symbols.GetAwaitPoints(moveNext);
-                location = state >= 0 && state < awaits.Length
-                    ? symbols.GetLocation(moveNext, awaits[state].YieldOffset)
-                    : symbols.GetLocation(moveNext, 0);
-            }
-
-            if (result.Count == 0)
-            {
-                result.Add(new FrameEntry { ThreadId = threadId, Depth = -1, Name = "[Async Call Stack]", IsLabel = true });
-            }
-
-            result.Add(new FrameEntry
-            {
-                ThreadId = threadId,
-                Depth = -1,
-                Module = type.Module,
-                MethodToken = moveNext,
-                Location = location,
-                Name = metadata.GetMethodDisplayName(moveNext),
-                IsUserCode = type.Module.IsUserCode,
-                StateMachine = _variables.Pin(stateMachine),
-            });
+            result.Add(frame);
             box = next;
         }
 
         return result;
+    }
+
+    /// <summary>A logical frame for a suspended async method: where its state says it awaits, with its locals.</summary>
+    private FrameEntry? DescribeAsyncFrame(ValueInfo stateMachine, int threadId, SourceLocation? where = null)
+    {
+        if (_inspector.Resolve(stateMachine) is not { Module.Metadata: { } metadata } type)
+        {
+            return null;
+        }
+
+        var moveNext = metadata.FindMethod(type.Token, "MoveNext", 0);
+        if (moveNext == 0)
+        {
+            return null;
+        }
+
+        var location = where;
+        if (location is null && type.Module.Symbols is { } symbols
+            && _inspector.FindField(stateMachine, "<>1__state") is { } stateValue
+            && ValueInspector.ReadPrimitive(stateValue, CorElementType.I4) is int state)
+        {
+            // Roslyn numbers await states in source order, matching the PDB's await list.
+            var awaits = symbols.GetAwaitPoints(moveNext);
+            location = state >= 0 && state < awaits.Length
+                ? symbols.GetLocation(moveNext, awaits[state].YieldOffset)
+                : symbols.GetLocation(moveNext, 0);
+        }
+
+        return new FrameEntry
+        {
+            ThreadId = threadId,
+            Depth = -1,
+            Module = type.Module,
+            MethodToken = moveNext,
+            Location = location,
+            Name = metadata.GetMethodDisplayName(moveNext),
+            IsUserCode = type.Module.IsUserCode,
+            StateMachine = _variables.Pin(stateMachine),
+        };
     }
 
     /// <summary>The task of an async state machine: its builder's <c>m_task</c>.</summary>
@@ -669,12 +694,40 @@ public sealed partial class DebugSession
             return display is null ? view : view with { Value = EvaluateDisplay(display, view.Value) };
         }
 
+        if (outcome.Constant is VoidResult)
+        {
+            return new VariableView(expression, "void") { Type = "void", IsReadOnly = true };
+        }
+
         return new VariableView(expression, ValueInspector.FormatPrimitive(outcome.Constant, hex))
             {
                 Type = outcome.Constant?.GetType().Name,
                 IsReadOnly = true,
             };
     }
+
+    /// <summary>
+    /// Delve's <c>call</c>: evaluates like <see cref="Evaluate"/>, but the whole program runs
+    /// while the code executes (so it may wait on other threads) and there is no time limit;
+    /// <see cref="AbortEvaluation"/> stops it.
+    /// </summary>
+    public VariableView Call(string expression, int? frameId, bool hex)
+    {
+        var (timeout, allThreads) = (_funcEval.Timeout, _funcEval.RunAllThreads);
+        _funcEval.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+        _funcEval.RunAllThreads = true;
+        try
+        {
+            return Evaluate(expression, frameId, hex);
+        }
+        finally
+        {
+            (_funcEval.Timeout, _funcEval.RunAllThreads) = (timeout, allThreads);
+        }
+    }
+
+    /// <summary>Any thread: aborts the code a func-eval is running, e.g. a <see cref="Call"/> that hangs.</summary>
+    public void AbortEvaluation() => _funcEval.RequestAbort();
 
     /// <summary>Assigns a new value to a child of a variables container.</summary>
     public VariableView SetVariable(int reference, string name, string value, bool hex)
@@ -866,6 +919,26 @@ public sealed partial class DebugSession
         private int _generation = -1;
 
         public ICorDebugThread Thread => thread;
+
+        public StaticType? DeclaringType
+        {
+            get
+            {
+                if (frame.Module?.Metadata is not { } metadata)
+                {
+                    return null;
+                }
+
+                // Lambdas, async methods and iterators run in compiler-generated nested types.
+                var token = metadata.GetDeclaringType(frame.MethodToken);
+                while (metadata.GetTypeName(token).Contains('<', StringComparison.Ordinal) && metadata.GetEnclosingType(token) is not 0 and var outer)
+                {
+                    token = outer;
+                }
+
+                return session._inspector.FindType(metadata.GetMetadataName(token));
+            }
+        }
 
         public ICorDebugValue? Lookup(string name)
         {
