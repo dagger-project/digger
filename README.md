@@ -1,5 +1,12 @@
 # Digger
 
+> [!WARNING]
+> **Digger is under heavy development.** Commands, options and launch settings may change
+> between releases without notice, and you will run into bugs and missing features. Please
+> [report problems](https://github.com/digger-project/digger/issues) with the output of
+> `digger dap --log=/tmp/digger.log` (or `digger debug --log=...`) attached, and don't rely on
+> it for anything critical yet.
+
 A debugger for .NET (CoreCLR) applications, written in C# 14. Use it straight from the
 terminal (`digger debug`, modeled on Go's [Delve](https://github.com/go-delve/delve)) or from
 any editor that speaks the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/):
