@@ -3,7 +3,7 @@
 > [!WARNING]
 > **Digger is under heavy development.** Commands, options and launch settings may change
 > between releases without notice, and you will run into bugs and missing features. Please
-> [report problems](https://github.com/digger-project/digger/issues) with the output of
+> [report problems](https://github.com/dagger-project/digger/issues) with the output of
 > `digger dap --log=/tmp/digger.log` (or `digger debug --log=...`) attached, and don't rely on
 > it for anything critical yet.
 

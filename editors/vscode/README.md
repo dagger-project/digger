@@ -1,6 +1,6 @@
 # Digger for VS Code, Cursor, VSCodium and Windsurf
 
-Registers the `digger` debug type, which runs [Digger](https://github.com/digger-project/digger)
+Registers the `digger` debug type, which runs [Digger](https://github.com/dagger-project/digger)
 (`digger dap`) as the debug adapter for .NET programs.
 
 Install `digger` first (`dotnet tool install -g Digger.Debugger`), then this extension

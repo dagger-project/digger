@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "digger",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "https://github.com/digger-project/digger" },
+  "repository": { "type": "git", "url": "https://github.com/dagger-project/digger" },
   "engines": { "vscode": "^1.80.0" },
   "categories": ["Debuggers"],
   "keywords": ["dotnet", ".NET", "C#", "debugger", "coreclr"],

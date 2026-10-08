@@ -31,8 +31,8 @@
     <Authors>Digger contributors</Authors>
     <Product>Digger</Product>
     <Version>0.1.0</Version>
-    <PackageProjectUrl>https://github.com/digger-project/digger</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/digger-project/digger</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/dagger-project/digger</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/dagger-project/digger</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
   </PropertyGroup>
